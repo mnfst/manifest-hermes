@@ -1,0 +1,18 @@
+name: manifest
+version: 0.1.0
+manifest_version: 2
+api_version: 1
+license: MIT
+description: "Repair rejected tool calls: a corrected set of arguments comes back from Manifest and is applied on the retry."
+author: Manifest
+tags: [reliability, tools]
+provides_hooks:
+  - transform_tool_result
+  - post_tool_call
+requires_env:
+  - name: MNFST_KEY
+    description: "Manifest project key (Project Settings, Autofix on)"
+    url: "https://manifest.build"
+    secret: true
+python_dependencies:
+  - "mnfst>=1,<2"
