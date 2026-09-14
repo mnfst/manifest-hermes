@@ -1,0 +1,33 @@
+.gitignore
+  s_f0ae0327db6a73::t_7ee800e70a409a 1-4
+manifest/__init__.py
+  s_f0ae0327db6a73::t_1ee72109357813 1-83
+manifest/manifest_heal.py
+  s_f0ae0327db6a73::t_acbbce961447c2 1-114
+manifest/plugin.yaml
+  s_f0ae0327db6a73::t_51c4de4f6d634e 1-18
+manifest/skills/manifest/SKILL.md
+  s_f0ae0327db6a73::t_91235a5b835454 1-12
+pyproject.toml
+  s_f0ae0327db6a73::t_f18f1f7ede9e55 1-20
+tests/stub_heal.py
+  s_f0ae0327db6a73::t_f516e62fc56346 1-63
+tests/test_end_to_end.py
+  s_f0ae0327db6a73::t_b65ea590b9b701 1-72
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "32821d80c45f6b0811e329da52a58c3e833b27e0",
+  "prompts": {},
+  "sessions": {
+    "s_f0ae0327db6a73": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "4df21493-36dc-423b-bcaf-fcfa19f6d776",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "Guillaume Gay <guillaume.gay@protonmail.com>"
+    }
+  }
+}
