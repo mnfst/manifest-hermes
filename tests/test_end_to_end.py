@@ -54,12 +54,17 @@ def make(stub):
     return Healer(HealClient("mnfx_k", stub.url, timeout=5.0), timeout=5.0)
 
 
+def callbacks(healer, plugin=None):
+    """Build with every tool treated as external; scope itself is tested below."""
+    return (plugin or load_plugin()).build_callbacks(healer, lambda name: True)
+
+
 def test_reject_then_repaired_retry():
     stub = StubHeal().start()
     try:
         stub.result = PATCHED
         healer = make(stub)
-        cb = load_plugin().build_callbacks(healer)
+        cb = callbacks(healer)
 
         first = hermes_call(cb, "list_issues", {"sort": "occurrence_count", "token": "s3cret"})
         assert first.endswith(RETRY_LINE.format(tool="list_issues"))
@@ -87,7 +92,7 @@ def test_reject_then_repaired_retry():
 def test_no_patch_passes_the_error_through():
     stub = StubHeal().start()
     try:
-        cb = load_plugin().build_callbacks(make(stub))
+        cb = callbacks(make(stub))
         out = hermes_call(cb, "list_issues", {"sort": "x"})
         assert out == '{"error": "invalid sort"}'
         assert cb["tool_request"](tool_name="list_issues", args={"sort": "x"}) is None
@@ -99,7 +104,7 @@ def test_failed_retry_reports_422_with_the_error():
     stub = StubHeal().start()
     try:
         stub.result = {"status": "patched", "healAttemptId": "a2", "healedRequest": {"body": {"sort": "nope"}}}
-        cb = load_plugin().build_callbacks(make(stub))
+        cb = callbacks(make(stub))
         hermes_call(cb, "list_issues", {"sort": "x"})
         out = hermes_call(cb, "list_issues", {"sort": "x"})  # retry with sort=nope fails too
         assert out == '{"error": "invalid sort"}'  # no second retry line
@@ -198,10 +203,54 @@ def test_a_validator_rejection_reaches_the_api_in_its_own_shape():
     stub = StubHeal().start()
     try:
         stub.result = PATCHED
-        cb = load_plugin().build_callbacks(make(stub))
+        cb = callbacks(make(stub))
         raw = '{"issues": [{"code": "invalid_enum_value", "path": ["sort"], "message": "bad sort"}]}'
         cb["transform_tool_result"](tool_name="list_issues", args={"sort": "x"}, result=raw,
                                     status="error", error_message="bad sort")
         assert stub.heals[0]["response"]["body"] == json.loads(raw)
     finally:
         stub.stop()
+
+
+def test_only_external_tools_are_repaired():
+    """A local tool has no API contract to learn, so it is never sent anywhere."""
+    plugin = load_plugin()
+    toolsets = {"list_issues": "mcp-composio", "terminal": "core", "read_file": "files"}
+    is_external = plugin.external_tool_filter(toolset_of=toolsets.get)
+    assert is_external("list_issues")
+    assert not is_external("terminal")
+    assert not is_external("read_file")
+    assert not is_external("never_registered")  # unplaceable counts as local
+
+    extended = plugin.external_tool_filter(extra=("github_",), toolset_of=toolsets.get)
+    assert extended("github_create_issue")
+    assert not extended("terminal")
+
+
+def test_a_local_tool_failure_never_reaches_the_api():
+    stub = StubHeal().start()
+    try:
+        stub.result = PATCHED
+        plugin = load_plugin()
+        cb = plugin.build_callbacks(make(stub),
+                                    plugin.external_tool_filter(toolset_of={"list_issues": "mcp-x"}.get))
+        out = cb["transform_tool_result"](tool_name="terminal", args={"command": "rm -rf /tmp/x"},
+                                          result='{"error": "exit 1"}', status="error",
+                                          error_message="exit 1")
+        assert out is None
+        assert stub.heals == []
+
+        healed = cb["transform_tool_result"](tool_name="list_issues", args={"sort": "x"},
+                                             result='{"error": "invalid sort"}', status="error",
+                                             error_message="invalid sort")
+        assert healed is not None
+        assert len(stub.heals) == 1
+    finally:
+        stub.stop()
+
+
+def test_registry_lookup_without_hermes_places_nothing():
+    """Outside Hermes the registry import fails; the filter then heals nothing."""
+    plugin = load_plugin()
+    assert plugin._toolset_of("anything") is None
+    assert not plugin.external_tool_filter()("anything")

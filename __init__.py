@@ -4,8 +4,13 @@ A failed tool result is sent to the Manifest heal API. When a corrected set
 of arguments comes back, the model is told to call the tool again, and the
 retry runs with the corrected arguments. One heal, one retry, fail-open.
 
+Only calls to external services are repaired: Hermes' MCP tools, plus any
+name prefix listed in MNFST_TOOLS. A local tool (terminal, file, memory) is
+never touched.
+
 Environment: MNFST_KEY (required), MNFST_URL (optional),
-MNFST_HEAL_TIMEOUT seconds (default 20). If the optional `mnfst` package is
+MNFST_HEAL_TIMEOUT seconds (default 20), MNFST_TOOLS (comma-separated name
+prefixes to treat as external). If the optional `mnfst` package is
 installed, HTTP calls made inside the Hermes process are healed at the
 transport level as well; MNFST_HEAL_HTTP=0 skips that.
 """
@@ -23,16 +28,50 @@ except ImportError:  # loaded flat, plugin directory on sys.path
 logger = logging.getLogger(__name__)
 
 
+def _toolset_of(tool_name: str) -> Optional[str]:
+    """The Hermes toolset a tool is registered under, or None when unknown."""
+    try:
+        from tools.registry import registry  # Hermes' own tool registry
+        entry = registry.get_entry(tool_name)
+    except Exception:
+        return None
+    return getattr(entry, "toolset", None) if entry is not None else None
+
+
+def external_tool_filter(extra: tuple = (), toolset_of: Callable[[str], Optional[str]] = _toolset_of):
+    """Only a call to an external service is repairable.
+
+    Manifest learns a contract from an API's own rejections; a local tool has
+    none, and rewriting the arguments of a shell or file tool is not something
+    a remote service should do. Hermes registers MCP tools under `mcp-*`
+    toolsets, so those are the repairable ones. A tool that cannot be placed
+    counts as local and is left alone. MNFST_TOOLS adds name prefixes for an
+    in-process tool that does wrap an API.
+    """
+    def is_external(tool_name: str) -> bool:
+        if any(tool_name.startswith(prefix) for prefix in extra):
+            return True
+        toolset = toolset_of(tool_name)
+        return bool(toolset and toolset.startswith("mcp-"))
+
+    return is_external
+
+
 def rewrite_result(result: str, tool_name: str) -> str:
     return result + "\n\n" + RETRY_LINE.format(tool=tool_name)
 
 
-def build_callbacks(healer: Healer) -> Dict[str, Callable[..., Any]]:
+def build_callbacks(healer: Healer,
+                    is_external: Optional[Callable[[str], bool]] = None) -> Dict[str, Callable[..., Any]]:
+    is_external = is_external or external_tool_filter()
+
     def on_result(tool_name: str = "", args: Any = None, result: Any = None,
                   status: Optional[str] = None, error_message: Optional[str] = None,
                   **_: Any) -> Optional[str]:
         try:
             if status != "error" or not isinstance(result, str) or not isinstance(args, dict):
+                return None
+            if not is_external(tool_name):
                 return None
             patched = healer.on_error(tool_name, args, error_message or "", raw_result=result)
             return rewrite_result(result, tool_name) if patched is not None else None
@@ -71,8 +110,9 @@ def register(ctx) -> None:
         return
     url = os.environ.get("MNFST_URL", "").strip() or DEFAULT_URL
     timeout = float(os.environ.get("MNFST_HEAL_TIMEOUT", "20"))
+    extra = tuple(t.strip() for t in os.environ.get("MNFST_TOOLS", "").split(",") if t.strip())
     healer = Healer(HealClient(key, url, timeout=timeout), timeout=timeout)
-    callbacks = build_callbacks(healer)
+    callbacks = build_callbacks(healer, external_tool_filter(extra))
     ctx.register_hook("transform_tool_result", callbacks["transform_tool_result"])
     ctx.register_middleware("tool_request", callbacks["tool_request"])
     ctx.register_hook("post_tool_call", callbacks["post_tool_call"])
