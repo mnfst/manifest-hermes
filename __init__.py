@@ -36,6 +36,31 @@ def _tool_entry(tool_name: str):
         return None
 
 
+_HOSTS: Dict[str, Optional[str]] = {}
+
+
+def _mcp_server_host(server: str) -> Optional[str]:
+    """The host of a configured MCP server, from Hermes' own configuration.
+
+    Cached: the lookup parses the config file, and the answer cannot change
+    without a restart.
+    """
+    if server in _HOSTS:
+        return _HOSTS[server]
+    host = None
+    try:
+        from urllib.parse import urlsplit
+        from hermes_cli.config import load_config_readonly
+        entry = ((load_config_readonly() or {}).get("mcp_servers") or {}).get(server)
+        url = entry.get("url") if isinstance(entry, dict) else None
+        if isinstance(url, str) and url:
+            host = urlsplit(url).netloc.split("@")[-1].lower() or None
+    except Exception:
+        host = None
+    _HOSTS[server] = host
+    return host
+
+
 def external_tool_filter(extra: tuple = (), entry_of: Callable[[str], Any] = _tool_entry):
     """The service a tool calls, or None when the tool is local.
 
@@ -68,7 +93,9 @@ def rewrite_result(result: str, tool_name: str) -> str:
 
 
 def build_callbacks(healer: Healer,
-                    service_of: Optional[Callable[[str], Optional[str]]] = None) -> Dict[str, Callable[..., Any]]:
+                    service_of: Optional[Callable[[str], Optional[str]]] = None,
+                    host_of: Callable[[str], Optional[str]] = _mcp_server_host,
+                    ) -> Dict[str, Callable[..., Any]]:
     service_of = service_of or external_tool_filter()
 
     def on_result(tool_name: str = "", args: Any = None, result: Any = None,
@@ -81,7 +108,7 @@ def build_callbacks(healer: Healer,
             if server is None:
                 return None
             patched = healer.on_error(tool_name, args, error_message or "", raw_result=result,
-                                      server=server)
+                                      server=server, host=host_of(server))
             return rewrite_result(result, tool_name) if patched is not None else None
         except Exception as exc:
             logger.debug("manifest transform_tool_result failed open: %s", exc)

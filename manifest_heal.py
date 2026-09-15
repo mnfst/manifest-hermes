@@ -78,23 +78,40 @@ def error_body(error_message: str, raw_result: Any = None) -> Any:
     return {"error": {"message": error_message}}
 
 
-def tool_url(server: str, tool_name: str) -> str:
-    """`mcp://<server>/<tool>`.
+def tool_url(server: str, tool_name: str, host: Optional[str] = None) -> str:
+    """The failing call's URL.
 
-    Manifest reads the service from the host and the endpoint from the path,
-    so the server names the service and each tool is its own endpoint. Putting
-    the tool in the host instead would make every tool a separate service, and
-    the host is lowercased on the way in.
+    Manifest reads the service from the host and the endpoint from the path, so
+    the MCP server's own host names the service and each tool is its own
+    endpoint. The server's real host is used when it can be read from the Hermes
+    configuration; the `mcp` scheme is the fallback when it cannot.
+
+    The router's real path is not used: it carries a per-agent session id, which
+    would give every agent a different endpoint and collapse all of its tools
+    into one.
     """
+    if host:
+        return f"https://{host}/{tool_name}"
     return f"mcp://{server}/{tool_name}"
 
 
+def tool_headers(server: str) -> dict:
+    """A tool call is not a plain HTTP request, and the headers say so.
+
+    The path is synthesized from the tool name, so a reader who would otherwise
+    try the URL gets told what this row is and which MCP server produced it.
+    """
+    return {"content-type": "application/json", "x-manifest-tool-call": "mcp",
+            "x-manifest-mcp-server": server}
+
+
 def heal_payload(*, trace_id: str, tool_name: str, server: str, args: Any, error_message: str,
-                 raw_result: Any = None, response_time_ms: int = 0) -> dict:
+                 host: Optional[str] = None, raw_result: Any = None,
+                 response_time_ms: int = 0) -> dict:
     return {
         "traceId": trace_id,
-        "request": {"method": "POST", "url": tool_url(server, tool_name),
-                    "headers": {"content-type": "application/json"}, "body": traveling_body(args)},
+        "request": {"method": "POST", "url": tool_url(server, tool_name, host),
+                    "headers": tool_headers(server), "body": traveling_body(args)},
         "response": {"statusCode": 422, "body": error_body(error_message, raw_result),
                      "truncated": False},
         "responseTimeMs": int(response_time_ms),
@@ -198,13 +215,15 @@ class Healer:
         self._pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="mnfst-heal")
 
     def on_error(self, tool_name: str, args: dict, error_message: str,
-                 raw_result: Any = None, server: str = "mcp") -> Optional[dict]:
+                 raw_result: Any = None, server: str = "mcp",
+                 host: Optional[str] = None) -> Optional[dict]:
         with self._lock:
             if key_of(tool_name, args) in self._burned:
                 return None
         try:
             payload = heal_payload(trace_id=uuid.uuid4().hex, tool_name=tool_name, server=server,
-                                   args=args, error_message=error_message, raw_result=raw_result)
+                                   args=args, error_message=error_message, host=host,
+                                   raw_result=raw_result)
             result = self._pool.submit(self.api.heal, payload).result(timeout=self.timeout)
         except FutureTimeout:
             return None

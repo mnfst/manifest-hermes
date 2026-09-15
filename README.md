@@ -11,7 +11,9 @@ Set `MNFST_KEY` (your Manifest project key, with Autofix on) when prompted or in
 
 ## What it repairs
 
-MCP tools only, from any MCP server. Hermes registers them under an `mcp-<server>` toolset, and the server names the service in Manifest.
+MCP tools only, from any MCP server. Hermes registers them under an `mcp-<server>` toolset.
+
+A capture carries the MCP server's real host and the tool as the path, for example `https://backend.composio.dev/GMAIL_FETCH_EMAILS`, so the service in Manifest is the server that rejected the call and each tool is its own endpoint. The router's real path is not used: it carries a per-agent session id. The headers `x-manifest-tool-call: mcp` and `x-manifest-mcp-server` mark the row as a tool call rather than a plain HTTP request. When the host cannot be read from the Hermes configuration, the URL falls back to `mcp://<server>/<tool>`.
 
 Built-in tools are never repaired, including API-backed ones such as `web_search`. Local tools (terminal, file, memory) are never sent anywhere. A tool the registry cannot place counts as local, so an unreadable registry heals nothing rather than everything. `MNFST_TOOLS` is the explicit opt-in for a tool outside that rule.
 

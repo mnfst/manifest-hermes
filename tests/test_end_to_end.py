@@ -6,7 +6,7 @@ import pathlib
 import sys
 import time
 
-from manifest_heal import Healer, HealClient, RETRY_LINE, error_body
+from manifest_heal import Healer, HealClient, RETRY_LINE, error_body, tool_url
 from tests.stub_heal import StubHeal
 
 
@@ -56,7 +56,8 @@ def make(stub):
 
 def callbacks(healer, plugin=None):
     """Build with every tool treated as external; scope itself is tested below."""
-    return (plugin or load_plugin()).build_callbacks(healer, lambda name: "composio")
+    return (plugin or load_plugin()).build_callbacks(
+        healer, lambda name: "composio", lambda server: "backend.composio.dev")
 
 
 def test_reject_then_repaired_retry():
@@ -69,7 +70,9 @@ def test_reject_then_repaired_retry():
         first = hermes_call(cb, "list_issues", {"sort": "occurrence_count", "token": "s3cret"})
         assert first.endswith(RETRY_LINE.format(tool="list_issues"))
         capture = stub.heals[0]
-        assert capture["request"]["url"] == "mcp://composio/list_issues"
+        assert capture["request"]["url"] == "https://backend.composio.dev/list_issues"
+        assert capture["request"]["headers"]["x-manifest-tool-call"] == "mcp"
+        assert capture["request"]["headers"]["x-manifest-mcp-server"] == "composio"
         assert capture["request"]["body"] == {"sort": "occurrence_count"}  # token withheld
         assert capture["response"] == {"statusCode": 422,
                                        "body": {"error": {"message": "invalid sort"}},
@@ -185,10 +188,19 @@ def test_plugin_has_no_third_party_imports():
         assert "import httpx" not in text and "import requests" not in text
 
 
-def test_the_server_names_the_service_and_the_tool_is_the_endpoint():
+def test_the_real_host_names_the_service_and_the_tool_is_the_endpoint():
     """Manifest reads the service from the host and the endpoint from the path."""
-    from manifest_heal import tool_url
+    assert (tool_url("composio", "GMAIL_FETCH_EMAILS", "backend.composio.dev")
+            == "https://backend.composio.dev/GMAIL_FETCH_EMAILS")
+    # No configured host to read: the scheme says the row is a tool call.
     assert tool_url("composio", "GMAIL_FETCH_EMAILS") == "mcp://composio/GMAIL_FETCH_EMAILS"
+
+
+def test_the_headers_say_the_row_is_a_tool_call():
+    from manifest_heal import tool_headers
+    headers = tool_headers("composio")
+    assert headers["x-manifest-tool-call"] == "mcp"
+    assert headers["x-manifest-mcp-server"] == "composio"
 
 
 def test_validator_payloads_travel_untouched():
@@ -258,7 +270,8 @@ def test_a_local_tool_failure_never_reaches_the_api():
     try:
         stub.result = PATCHED
         plugin = load_plugin()
-        cb = plugin.build_callbacks(make(stub), plugin.external_tool_filter(entry_of=REGISTRY.get))
+        cb = plugin.build_callbacks(make(stub), plugin.external_tool_filter(entry_of=REGISTRY.get),
+                                    lambda server: None)
         out = cb["transform_tool_result"](tool_name="terminal", args={"command": "rm -rf /tmp/x"},
                                           result='{"error": "exit 1"}', status="error",
                                           error_message="exit 1")
@@ -279,3 +292,8 @@ def test_registry_lookup_without_hermes_places_nothing():
     plugin = load_plugin()
     assert plugin._tool_entry("anything") is None
     assert plugin.external_tool_filter()("anything") is None
+
+
+def test_an_unreadable_configuration_falls_back_to_the_mcp_scheme():
+    plugin = load_plugin()
+    assert plugin._mcp_server_host("never-configured") is None
