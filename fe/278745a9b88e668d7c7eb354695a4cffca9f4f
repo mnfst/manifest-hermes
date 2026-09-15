@@ -1,0 +1,25 @@
+README.md
+  s_f0ae0327db6a73::t_93ce7daf632d98 12-15,22,26
+__init__.py
+  s_f0ae0327db6a73::t_42d0cf7544997d 7-10,12-13,31-59,64-67,74-75,113,115
+skills/manifest/SKILL.md
+  s_f0ae0327db6a73::t_3ecd0ebba64965 10
+tests/test_end_to_end.py
+  s_f0ae0327db6a73::t_f08210630b6976 57-61,67,95,107,206,213-256
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "fe278745a9b88e668d7c7eb354695a4cffca9f4f",
+  "prompts": {},
+  "sessions": {
+    "s_f0ae0327db6a73": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "4df21493-36dc-423b-bcaf-fcfa19f6d776",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Guillaume Gay <guillaume.gay@protonmail.com>"
+    }
+  }
+}
