@@ -78,11 +78,22 @@ def error_body(error_message: str, raw_result: Any = None) -> Any:
     return {"error": {"message": error_message}}
 
 
-def heal_payload(*, trace_id: str, tool_name: str, args: Any, error_message: str,
+def tool_url(server: str, tool_name: str) -> str:
+    """`mcp://<server>/<tool>`.
+
+    Manifest reads the service from the host and the endpoint from the path,
+    so the server names the service and each tool is its own endpoint. Putting
+    the tool in the host instead would make every tool a separate service, and
+    the host is lowercased on the way in.
+    """
+    return f"mcp://{server}/{tool_name}"
+
+
+def heal_payload(*, trace_id: str, tool_name: str, server: str, args: Any, error_message: str,
                  raw_result: Any = None, response_time_ms: int = 0) -> dict:
     return {
         "traceId": trace_id,
-        "request": {"method": "POST", "url": f"mcp://{tool_name}",
+        "request": {"method": "POST", "url": tool_url(server, tool_name),
                     "headers": {"content-type": "application/json"}, "body": traveling_body(args)},
         "response": {"statusCode": 422, "body": error_body(error_message, raw_result),
                      "truncated": False},
@@ -187,13 +198,13 @@ class Healer:
         self._pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="mnfst-heal")
 
     def on_error(self, tool_name: str, args: dict, error_message: str,
-                 raw_result: Any = None) -> Optional[dict]:
+                 raw_result: Any = None, server: str = "mcp") -> Optional[dict]:
         with self._lock:
             if key_of(tool_name, args) in self._burned:
                 return None
         try:
-            payload = heal_payload(trace_id=uuid.uuid4().hex, tool_name=tool_name, args=args,
-                                   error_message=error_message, raw_result=raw_result)
+            payload = heal_payload(trace_id=uuid.uuid4().hex, tool_name=tool_name, server=server,
+                                   args=args, error_message=error_message, raw_result=raw_result)
             result = self._pool.submit(self.api.heal, payload).result(timeout=self.timeout)
         except FutureTimeout:
             return None

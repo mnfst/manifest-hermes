@@ -39,22 +39,25 @@ def _toolset_of(tool_name: str) -> Optional[str]:
 
 
 def external_tool_filter(extra: tuple = (), toolset_of: Callable[[str], Optional[str]] = _toolset_of):
-    """Only a call to an external service is repairable.
+    """The service a tool calls, or None when the tool is local.
 
     Manifest learns a contract from an API's own rejections; a local tool has
     none, and rewriting the arguments of a shell or file tool is not something
-    a remote service should do. Hermes registers MCP tools under `mcp-*`
-    toolsets, so those are the repairable ones. A tool that cannot be placed
+    a remote service should do. Hermes registers MCP tools under `mcp-<server>`
+    toolsets, so the server names the service. A tool that cannot be placed
     counts as local and is left alone. MNFST_TOOLS adds name prefixes for an
-    in-process tool that does wrap an API.
+    in-process tool that does wrap an API; the prefix names its service.
     """
-    def is_external(tool_name: str) -> bool:
-        if any(tool_name.startswith(prefix) for prefix in extra):
-            return True
+    def service_of(tool_name: str) -> Optional[str]:
         toolset = toolset_of(tool_name)
-        return bool(toolset and toolset.startswith("mcp-"))
+        if toolset and toolset.startswith("mcp-"):
+            return toolset[len("mcp-"):].strip("-_") or "mcp"
+        for prefix in extra:
+            if tool_name.startswith(prefix):
+                return prefix.strip("-_") or "mcp"
+        return None
 
-    return is_external
+    return service_of
 
 
 def rewrite_result(result: str, tool_name: str) -> str:
@@ -62,8 +65,8 @@ def rewrite_result(result: str, tool_name: str) -> str:
 
 
 def build_callbacks(healer: Healer,
-                    is_external: Optional[Callable[[str], bool]] = None) -> Dict[str, Callable[..., Any]]:
-    is_external = is_external or external_tool_filter()
+                    service_of: Optional[Callable[[str], Optional[str]]] = None) -> Dict[str, Callable[..., Any]]:
+    service_of = service_of or external_tool_filter()
 
     def on_result(tool_name: str = "", args: Any = None, result: Any = None,
                   status: Optional[str] = None, error_message: Optional[str] = None,
@@ -71,9 +74,11 @@ def build_callbacks(healer: Healer,
         try:
             if status != "error" or not isinstance(result, str) or not isinstance(args, dict):
                 return None
-            if not is_external(tool_name):
+            server = service_of(tool_name)
+            if server is None:
                 return None
-            patched = healer.on_error(tool_name, args, error_message or "", raw_result=result)
+            patched = healer.on_error(tool_name, args, error_message or "", raw_result=result,
+                                      server=server)
             return rewrite_result(result, tool_name) if patched is not None else None
         except Exception as exc:
             logger.debug("manifest transform_tool_result failed open: %s", exc)

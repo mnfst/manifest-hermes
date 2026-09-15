@@ -56,7 +56,7 @@ def make(stub):
 
 def callbacks(healer, plugin=None):
     """Build with every tool treated as external; scope itself is tested below."""
-    return (plugin or load_plugin()).build_callbacks(healer, lambda name: True)
+    return (plugin or load_plugin()).build_callbacks(healer, lambda name: "composio")
 
 
 def test_reject_then_repaired_retry():
@@ -69,7 +69,7 @@ def test_reject_then_repaired_retry():
         first = hermes_call(cb, "list_issues", {"sort": "occurrence_count", "token": "s3cret"})
         assert first.endswith(RETRY_LINE.format(tool="list_issues"))
         capture = stub.heals[0]
-        assert capture["request"]["url"] == "mcp://list_issues"
+        assert capture["request"]["url"] == "mcp://composio/list_issues"
         assert capture["request"]["body"] == {"sort": "occurrence_count"}  # token withheld
         assert capture["response"] == {"statusCode": 422,
                                        "body": {"error": {"message": "invalid sort"}},
@@ -185,6 +185,12 @@ def test_plugin_has_no_third_party_imports():
         assert "import httpx" not in text and "import requests" not in text
 
 
+def test_the_server_names_the_service_and_the_tool_is_the_endpoint():
+    """Manifest reads the service from the host and the endpoint from the path."""
+    from manifest_heal import tool_url
+    assert tool_url("composio", "GMAIL_FETCH_EMAILS") == "mcp://composio/GMAIL_FETCH_EMAILS"
+
+
 def test_validator_payloads_travel_untouched():
     """The server recognizes Zod and Pydantic dialects and repairs by field path;
     a free-text error travels as a message envelope instead."""
@@ -216,15 +222,15 @@ def test_only_external_tools_are_repaired():
     """A local tool has no API contract to learn, so it is never sent anywhere."""
     plugin = load_plugin()
     toolsets = {"list_issues": "mcp-composio", "terminal": "core", "read_file": "files"}
-    is_external = plugin.external_tool_filter(toolset_of=toolsets.get)
-    assert is_external("list_issues")
-    assert not is_external("terminal")
-    assert not is_external("read_file")
-    assert not is_external("never_registered")  # unplaceable counts as local
+    service_of = plugin.external_tool_filter(toolset_of=toolsets.get)
+    assert service_of("list_issues") == "composio"   # names the service, not the tool
+    assert service_of("terminal") is None
+    assert service_of("read_file") is None
+    assert service_of("never_registered") is None    # unplaceable counts as local
 
     extended = plugin.external_tool_filter(extra=("github_",), toolset_of=toolsets.get)
-    assert extended("github_create_issue")
-    assert not extended("terminal")
+    assert extended("github_create_issue") == "github"
+    assert extended("terminal") is None
 
 
 def test_a_local_tool_failure_never_reaches_the_api():
@@ -253,4 +259,4 @@ def test_registry_lookup_without_hermes_places_nothing():
     """Outside Hermes the registry import fails; the filter then heals nothing."""
     plugin = load_plugin()
     assert plugin._toolset_of("anything") is None
-    assert not plugin.external_tool_filter()("anything")
+    assert plugin.external_tool_filter()("anything") is None
