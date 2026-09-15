@@ -1,12 +1,13 @@
-"""manifest: repair rejected tool calls with Manifest.
+"""manifest: repair rejected tool calls with Manifest. Hermes Agent plugin, no dependencies.
 
 A failed tool result is sent to the Manifest heal API. When a corrected set
 of arguments comes back, the model is told to call the tool again, and the
 retry runs with the corrected arguments. One heal, one retry, fail-open.
 
 Environment: MNFST_KEY (required), MNFST_URL (optional),
-MNFST_HEAL_TIMEOUT seconds (default 20), MNFST_HEAL_HTTP=0 to skip the
-transport-level manifest() install for in-process HTTP tools.
+MNFST_HEAL_TIMEOUT seconds (default 20). If the optional `mnfst` package is
+installed, HTTP calls made inside the Hermes process are healed at the
+transport level as well; MNFST_HEAL_HTTP=0 skips that.
 """
 from __future__ import annotations
 
@@ -14,10 +15,10 @@ import logging
 import os
 from typing import Any, Callable, Dict, Optional
 
-from mnfst.config import resolve_config
-from mnfst.heal_api import HealApi
-
-from .manifest_heal import RETRY_LINE, Healer
+try:  # loaded as a package by Hermes
+    from .manifest_heal import DEFAULT_URL, RETRY_LINE, HealClient, Healer
+except ImportError:  # loaded flat, plugin directory on sys.path
+    from manifest_heal import DEFAULT_URL, RETRY_LINE, HealClient, Healer  # type: ignore
 
 logger = logging.getLogger(__name__)
 
@@ -64,12 +65,13 @@ def build_callbacks(healer: Healer) -> Dict[str, Callable[..., Any]]:
 
 
 def register(ctx) -> None:
-    config = resolve_config()
-    if config.api_key is None:
+    key = os.environ.get("MNFST_KEY", "").strip()
+    if not key:
         logger.warning("manifest plugin: MNFST_KEY is not set; nothing registered")
         return
+    url = os.environ.get("MNFST_URL", "").strip() or DEFAULT_URL
     timeout = float(os.environ.get("MNFST_HEAL_TIMEOUT", "20"))
-    healer = Healer(HealApi(config), timeout=timeout)
+    healer = Healer(HealClient(key, url, timeout=timeout), timeout=timeout)
     callbacks = build_callbacks(healer)
     ctx.register_hook("transform_tool_result", callbacks["transform_tool_result"])
     ctx.register_middleware("tool_request", callbacks["tool_request"])
@@ -77,7 +79,10 @@ def register(ctx) -> None:
     logger.info("manifest plugin: tool-call repair registered")
     if os.environ.get("MNFST_HEAL_HTTP", "1") != "0":
         try:
-            from mnfst import manifest
+            from mnfst import manifest  # optional: transport-level healing for in-process HTTP
+        except ImportError:
+            return
+        try:
             manifest()
         except Exception as exc:
             logger.warning("manifest plugin: transport install skipped: %s", exc)

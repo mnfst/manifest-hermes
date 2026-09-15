@@ -12,6 +12,7 @@ class StubHeal:
         self.result: Optional[dict] = None
         self.heals: list[dict] = []
         self.outcomes: list[tuple[str, dict]] = []
+        self.disabled = False  # answer 403 project_disabled to heals
         self._server: Optional[ThreadingHTTPServer] = None
 
     @property
@@ -42,6 +43,8 @@ class StubHeal:
                 if self.path != "/v1/heal":
                     return self._reply(404, {"error": "not_found"})
                 stub.heals.append(self._read())
+                if stub.disabled:
+                    return self._reply(403, {"error": "project_disabled"})
                 self._reply(200, stub.result or {"status": "no_patch", "issueId": "stub"})
 
             def do_PATCH(self):

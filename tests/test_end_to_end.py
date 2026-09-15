@@ -1,12 +1,23 @@
 """The full sequence as Hermes fires it (model_tools.handle_function_call):
 tool_request middleware -> dispatch -> post_tool_call -> transform_tool_result."""
-from mnfst.config import resolve_config
-from mnfst.heal_api import HealApi
-
-import manifest as plugin
-from manifest.manifest_heal import Healer, RETRY_LINE
-from tests.stub_heal import StubHeal
+import importlib.util
+import pathlib
+import sys
 import time
+
+from manifest_heal import Healer, HealClient, RETRY_LINE
+from tests.stub_heal import StubHeal
+
+
+def load_plugin():
+    """Load the repo root as a package, the way Hermes loads a plugin directory."""
+    root = pathlib.Path(__file__).resolve().parents[1]
+    spec = importlib.util.spec_from_file_location("manifest_plugin", root / "__init__.py",
+                                                  submodule_search_locations=[str(root)])
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["manifest_plugin"] = module
+    spec.loader.exec_module(module)
+    return module
 
 
 def wait_for(predicate, timeout=3.0):
@@ -34,19 +45,29 @@ def hermes_call(cb, tool_name, args):
     return replaced if isinstance(replaced, str) else result
 
 
+PATCHED = {"status": "patched", "issueId": "i1", "healAttemptId": "a1",
+           "healedRequest": {"body": {"sort": "created_at"}}}
+
+
+def make(stub):
+    return Healer(HealClient("mnfx_k", stub.url, timeout=5.0), timeout=5.0)
+
+
 def test_reject_then_repaired_retry():
     stub = StubHeal().start()
     try:
-        stub.result = {"status": "patched", "issueId": "i1", "healAttemptId": "a1",
-                       "healedRequest": {"body": {"sort": "created_at"}}}
-        healer = Healer(HealApi(resolve_config(api_key="mnfx_k", url=stub.url)), timeout=5.0)
-        cb = plugin.build_callbacks(healer)
+        stub.result = PATCHED
+        healer = make(stub)
+        cb = load_plugin().build_callbacks(healer)
 
-        first = hermes_call(cb, "list_issues", {"sort": "occurrence_count"})
+        first = hermes_call(cb, "list_issues", {"sort": "occurrence_count", "token": "s3cret"})
         assert first.endswith(RETRY_LINE.format(tool="list_issues"))
-        assert stub.heals[0]["request"]["url"] == "mcp://list_issues"
+        capture = stub.heals[0]
+        assert capture["request"]["url"] == "mcp://list_issues"
+        assert capture["request"]["body"] == {"sort": "occurrence_count"}  # token withheld
+        assert capture["response"] == {"statusCode": 422, "body": {"error": "invalid sort"}, "truncated": False}
 
-        second = hermes_call(cb, "list_issues", {"sort": "occurrence_count"})  # model retries as told
+        second = hermes_call(cb, "list_issues", {"sort": "occurrence_count", "token": "s3cret"})
         assert second == '{"ok": true}'
 
         assert wait_for(lambda: len(stub.outcomes) == 1)
@@ -63,10 +84,94 @@ def test_reject_then_repaired_retry():
 def test_no_patch_passes_the_error_through():
     stub = StubHeal().start()
     try:
-        healer = Healer(HealApi(resolve_config(api_key="mnfx_k", url=stub.url)), timeout=5.0)
-        cb = plugin.build_callbacks(healer)
+        cb = load_plugin().build_callbacks(make(stub))
         out = hermes_call(cb, "list_issues", {"sort": "x"})
         assert out == '{"error": "invalid sort"}'
         assert cb["tool_request"](tool_name="list_issues", args={"sort": "x"}) is None
     finally:
         stub.stop()
+
+
+def test_failed_retry_reports_422_with_the_error():
+    stub = StubHeal().start()
+    try:
+        stub.result = {"status": "patched", "healAttemptId": "a2", "healedRequest": {"body": {"sort": "nope"}}}
+        cb = load_plugin().build_callbacks(make(stub))
+        hermes_call(cb, "list_issues", {"sort": "x"})
+        out = hermes_call(cb, "list_issues", {"sort": "x"})  # retry with sort=nope fails too
+        assert out == '{"error": "invalid sort"}'  # no second retry line
+        assert wait_for(lambda: len(stub.outcomes) == 1)
+        assert stub.outcomes[0][0] == "a2"
+        assert stub.outcomes[0][1]["response"]["statusCode"] == 422
+        assert stub.outcomes[0][1]["response"]["body"] == {"error": "invalid sort"}
+        assert len(stub.heals) == 1
+    finally:
+        stub.stop()
+
+
+def test_unreachable_or_disabled_api_fails_open():
+    down = Healer(HealClient("mnfx_k", "http://127.0.0.1:9", timeout=2.0), timeout=2.0)
+    assert down.on_error("t", {"a": 1}, "e") is None
+
+    stub = StubHeal().start()
+    try:
+        stub.disabled = True
+        client = HealClient("mnfx_k", stub.url, timeout=5.0)
+        healer = Healer(client, timeout=5.0)
+        assert healer.on_error("t", {"a": 1}, "e") is None
+        assert not client.enabled()  # paused for five minutes after project_disabled
+        stub.disabled = False
+        stub.result = PATCHED
+        assert healer.on_error("t", {"a": 1}, "e") is None  # still paused, no request sent
+        assert len(stub.heals) == 1
+    finally:
+        stub.stop()
+
+
+def test_expired_patch_is_reported_not_attempted():
+    stub = StubHeal().start()
+    try:
+        now = [0.0]
+        healer = Healer(HealClient("mnfx_k", stub.url, timeout=5.0), timeout=5.0, ttl=10.0, clock=lambda: now[0])
+        stub.result = PATCHED
+        healer.on_error("t", {"a": 1}, "e")
+        now[0] = 11.0
+        healer.expire()
+        assert healer.take("t", {"a": 1}) is None
+        assert wait_for(lambda: len(stub.outcomes) == 1)
+        assert stub.outcomes[0][1] == {"failure": {"kind": "not_attempted", "message": "replay_not_attempted"}}
+    finally:
+        stub.stop()
+
+
+def test_register_wires_three_seams_and_respects_missing_key(monkeypatch):
+    class Ctx:
+        def __init__(self):
+            self.hooks, self.middleware = {}, {}
+
+        def register_hook(self, name, fn):
+            self.hooks[name] = fn
+
+        def register_middleware(self, kind, fn):
+            self.middleware[kind] = fn
+
+    monkeypatch.delenv("MNFST_KEY", raising=False)
+    ctx = Ctx()
+    load_plugin().register(ctx)
+    assert ctx.hooks == {} and ctx.middleware == {}
+
+    monkeypatch.setenv("MNFST_KEY", "mnfx_k")
+    monkeypatch.setenv("MNFST_URL", "http://127.0.0.1:9")
+    monkeypatch.setenv("MNFST_HEAL_HTTP", "0")
+    ctx = Ctx()
+    load_plugin().register(ctx)
+    assert set(ctx.hooks) == {"transform_tool_result", "post_tool_call"}
+    assert set(ctx.middleware) == {"tool_request"}
+
+
+def test_plugin_has_no_third_party_imports():
+    root = pathlib.Path(__file__).resolve().parents[1]
+    for name in ("__init__.py", "manifest_heal.py"):
+        text = (root / name).read_text()
+        assert "from mnfst" not in text.replace("from mnfst import manifest  # optional", "")
+        assert "import httpx" not in text and "import requests" not in text

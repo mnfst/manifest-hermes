@@ -1,19 +1,12 @@
+# Development only. The plugin itself has no dependencies and is installed with
+# `hermes plugins install`, never with pip.
 [project]
-name = "manifest-hermes"
+name = "manifest-hermes-dev"
 version = "0.1.0"
-description = "Hermes Agent plugin: repair rejected tool calls with Manifest."
 requires-python = ">=3.10"
-
-[build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
-dependencies = ["mnfst>=1,<2"]
 
 [project.optional-dependencies]
 dev = ["pytest>=8"]
-
-[tool.hatch.build.targets.wheel]
-packages = ["manifest"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
