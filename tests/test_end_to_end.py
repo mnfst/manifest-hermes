@@ -6,7 +6,7 @@ import pathlib
 import sys
 import time
 
-from manifest_heal import Healer, HealClient, RETRY_LINE, error_body, tool_url
+from manifest_heal import Healer, HealClient, RETRY_LINE, error_body, heal_payload
 from tests.stub_heal import StubHeal
 
 
@@ -56,8 +56,9 @@ def make(stub):
 
 def callbacks(healer, plugin=None):
     """Build with every tool treated as external; scope itself is tested below."""
-    return (plugin or load_plugin()).build_callbacks(
-        healer, lambda name: "composio", lambda server: "backend.composio.dev")
+    cb = (plugin or load_plugin()).build_callbacks(
+        healer, lambda name: "composio", lambda server: "https://backend.composio.dev")
+    return {name: lambda fn=fn, **kw: fn(**{"session_id": "test", **kw}) for name, fn in cb.items()}
 
 
 def test_reject_then_repaired_retry():
@@ -70,11 +71,11 @@ def test_reject_then_repaired_retry():
         first = hermes_call(cb, "list_issues", {"sort": "occurrence_count", "token": "s3cret"})
         assert first.endswith(RETRY_LINE.format(tool="list_issues"))
         capture = stub.heals[0]
-        assert capture["request"]["url"] == "https://backend.composio.dev/list_issues"
-        assert capture["request"]["headers"]["x-manifest-tool-call"] == "mcp"
-        assert capture["request"]["headers"]["x-manifest-mcp-server"] == "composio"
+        assert capture["target"] == {"protocol": "mcp", "server": "composio", "tool": "list_issues",
+                                     "serviceUrl": "https://backend.composio.dev"}
+        assert set(capture["request"]) == {"body"}
         assert capture["request"]["body"] == {"sort": "occurrence_count"}  # token withheld
-        assert capture["response"] == {"statusCode": 422,
+        assert capture["response"] == {"isError": True,
                                        "body": {"error": {"message": "invalid sort"}},
                                        "truncated": False}
 
@@ -83,10 +84,12 @@ def test_reject_then_repaired_retry():
 
         assert wait_for(lambda: len(stub.outcomes) == 1)
         assert len(stub.heals) == 1
-        assert stub.outcomes == [("a1", {"response": {"statusCode": 200}})]
+        assert stub.outcomes == [("a1", {"response": {"isError": False}})]
 
         # the patched args failing again are never re-healed
-        assert healer.on_error("list_issues", {"sort": "created_at"}, "still bad") is None
+        assert cb["transform_tool_result"](tool_name="list_issues",
+            args={"sort": "created_at", "token": "s3cret"}, result='{"error":"still bad"}',
+            status="error", error_message="still bad") is None
         assert len(stub.heals) == 1
     finally:
         stub.stop()
@@ -113,8 +116,8 @@ def test_failed_retry_reports_422_with_the_error():
         assert out == '{"error": "invalid sort"}'  # no second retry line
         assert wait_for(lambda: len(stub.outcomes) == 1)
         assert stub.outcomes[0][0] == "a2"
-        assert stub.outcomes[0][1]["response"]["statusCode"] == 422
-        assert stub.outcomes[0][1]["response"]["body"] == {"error": "invalid sort"}
+        assert stub.outcomes[0][1]["response"]["isError"] is True
+        assert stub.outcomes[0][1]["response"]["body"] == {"error": {"message": "invalid sort"}}
         assert len(stub.heals) == 1
     finally:
         stub.stop()
@@ -188,19 +191,11 @@ def test_plugin_has_no_third_party_imports():
         assert "import httpx" not in text and "import requests" not in text
 
 
-def test_the_real_host_names_the_service_and_the_tool_is_the_endpoint():
-    """Manifest reads the service from the host and the endpoint from the path."""
-    assert (tool_url("composio", "GMAIL_FETCH_EMAILS", "backend.composio.dev")
-            == "https://backend.composio.dev/GMAIL_FETCH_EMAILS")
-    # No configured host to read: the scheme says the row is a tool call.
-    assert tool_url("composio", "GMAIL_FETCH_EMAILS") == "mcp://composio/GMAIL_FETCH_EMAILS"
-
-
-def test_the_headers_say_the_row_is_a_tool_call():
-    from manifest_heal import tool_headers
-    headers = tool_headers("composio")
-    assert headers["x-manifest-tool-call"] == "mcp"
-    assert headers["x-manifest-mcp-server"] == "composio"
+def test_stdio_capture_needs_no_url():
+    payload = heal_payload(trace_id="t", server="local-server", tool_name="search",
+                           args={"sort": "x"}, error_message="invalid sort")
+    assert payload["target"] == {"protocol": "mcp", "server": "local-server", "tool": "search"}
+    assert payload["request"] == {"body": {"sort": "x"}}
 
 
 def test_validator_payloads_travel_untouched():
@@ -280,7 +275,7 @@ def test_a_local_tool_failure_never_reaches_the_api():
 
         healed = cb["transform_tool_result"](tool_name="list_issues", args={"sort": "x"},
                                              result='{"error": "invalid sort"}', status="error",
-                                             error_message="invalid sort")
+                                             error_message="invalid sort", session_id="test")
         assert healed is not None
         assert len(stub.heals) == 1
     finally:
@@ -296,4 +291,4 @@ def test_registry_lookup_without_hermes_places_nothing():
 
 def test_an_unreadable_configuration_falls_back_to_the_mcp_scheme():
     plugin = load_plugin()
-    assert plugin._mcp_server_host("never-configured") is None
+    assert plugin._mcp_service_url("never-configured") is None

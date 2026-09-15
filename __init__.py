@@ -9,14 +9,14 @@ listed in MNFST_TOOLS. Built-in tools are never touched.
 
 Environment: MNFST_KEY (required), MNFST_URL (optional),
 MNFST_HEAL_TIMEOUT seconds (default 20), MNFST_TOOLS (comma-separated name
-prefixes to treat as external). If the optional `mnfst` package is
-installed, HTTP calls made inside the Hermes process are healed at the
-transport level as well; MNFST_HEAL_HTTP=0 skips that.
+prefixes to treat as external). Optional, separate in-process HTTP healing
+requires the `mnfst` package and MNFST_HEAL_HTTP=1.
 """
 from __future__ import annotations
 
 import logging
 import os
+import json
 from typing import Any, Callable, Dict, Optional
 
 try:  # loaded as a package by Hermes
@@ -36,41 +36,31 @@ def _tool_entry(tool_name: str):
         return None
 
 
-_HOSTS: Dict[str, Optional[str]] = {}
-
-
-def _mcp_server_host(server: str) -> Optional[str]:
-    """The host of a configured MCP server, from Hermes' own configuration.
-
-    Cached: the lookup parses the config file, and the answer cannot change
-    without a restart.
-    """
-    if server in _HOSTS:
-        return _HOSTS[server]
-    host = None
+def _mcp_service_url(server: str) -> Optional[str]:
+    """Read the current profile's MCP config and send only its HTTP(S) origin."""
     try:
         from urllib.parse import urlsplit
-        from hermes_cli.config import load_config_readonly
-        entry = ((load_config_readonly() or {}).get("mcp_servers") or {}).get(server)
+        from tools.mcp_tool_config import _load_mcp_config
+        entry = _load_mcp_config().get(server)
         url = entry.get("url") if isinstance(entry, dict) else None
         if isinstance(url, str) and url:
-            host = urlsplit(url).netloc.split("@")[-1].lower() or None
+            parts = urlsplit(url)
+            if parts.scheme in ("http", "https") and parts.hostname:
+                return f"{parts.scheme}://{parts.netloc.rsplit('@', 1)[-1].lower()}"
     except Exception:
-        host = None
-    _HOSTS[server] = host
-    return host
+        pass
+    return None
 
 
 def external_tool_filter(extra: tuple = (), entry_of: Callable[[str], Any] = _tool_entry):
-    """The service a tool calls, or None when the tool is local.
+    """The MCP server a tool calls, or None for a built-in tool.
 
-    Manifest learns a contract from a service's own rejections. A local tool
-    has none, and rewriting the arguments of a shell or file tool is not
-    something a remote service should do.
+    Manifest learns a contract from a server's own rejections, over HTTP or
+    stdio. Built-in shell and file tools remain outside this repair flow.
 
     An `mcp-<server>` toolset marks the repairable ones: that is how Hermes
     registers every MCP server's tools, whatever the server. The server names
-    the service. Everything else counts as local, including a built-in tool
+    the service. Everything else is excluded, including a built-in tool
     that reaches an API, so an unreadable registry heals nothing rather than
     everything. MNFST_TOOLS is the explicit opt-in for a tool outside that
     rule; the prefix names its service.
@@ -79,7 +69,7 @@ def external_tool_filter(extra: tuple = (), entry_of: Callable[[str], Any] = _to
         entry = entry_of(tool_name)
         toolset = getattr(entry, "toolset", None) if entry is not None else None
         if toolset and toolset.startswith("mcp-"):
-            return toolset[len("mcp-"):].strip("-_") or "mcp"
+            return toolset[len("mcp-"):] or None
         for prefix in extra:
             if tool_name.startswith(prefix):
                 return prefix.strip("-_") or "tool"
@@ -94,31 +84,38 @@ def rewrite_result(result: str, tool_name: str) -> str:
 
 def build_callbacks(healer: Healer,
                     service_of: Optional[Callable[[str], Optional[str]]] = None,
-                    host_of: Callable[[str], Optional[str]] = _mcp_server_host,
+                    service_url_of: Callable[[str], Optional[str]] = _mcp_service_url,
                     ) -> Dict[str, Callable[..., Any]]:
     service_of = service_of or external_tool_filter()
 
     def on_result(tool_name: str = "", args: Any = None, result: Any = None,
                   status: Optional[str] = None, error_message: Optional[str] = None,
+                  session_id: Optional[str] = None, task_id: Optional[str] = None,
+                  duration_ms: int = 0,
                   **_: Any) -> Optional[str]:
         try:
+            if not session_id and not task_id:
+                return None  # No identity to scope a later retry safely.
             if status != "error" or not isinstance(result, str) or not isinstance(args, dict):
                 return None
             server = service_of(tool_name)
             if server is None:
                 return None
             patched = healer.on_error(tool_name, args, error_message or "", raw_result=result,
-                                      server=server, host=host_of(server))
+                                      server=server, service_url=service_url_of(server),
+                                      scope=json.dumps([session_id, task_id]),
+                                      response_time_ms=duration_ms)
             return rewrite_result(result, tool_name) if patched is not None else None
         except Exception as exc:
             logger.debug("manifest transform_tool_result failed open: %s", exc)
             return None
 
-    def on_request(tool_name: str = "", args: Any = None, **_: Any) -> Optional[dict]:
+    def on_request(tool_name: str = "", args: Any = None, session_id: Optional[str] = None,
+                   task_id: Optional[str] = None, **_: Any) -> Optional[dict]:
         try:
             if not isinstance(args, dict):
                 return None
-            pending = healer.take(tool_name, args)
+            pending = healer.take(tool_name, args, scope=json.dumps([session_id, task_id]))
             if pending is None:
                 return None
             return {"args": pending.args, "source": "manifest", "reason": "healed"}
@@ -127,10 +124,12 @@ def build_callbacks(healer: Healer,
             return None
 
     def on_post(tool_name: str = "", args: Any = None, status: Optional[str] = None,
-                error_message: Optional[str] = None, **_: Any) -> None:
+                error_message: Optional[str] = None, result: Any = None,
+                session_id: Optional[str] = None, task_id: Optional[str] = None, **_: Any) -> None:
         try:
             if isinstance(args, dict):
-                healer.outcome(tool_name, args, status, error_message)
+                healer.outcome(tool_name, args, status, error_message,
+                               scope=json.dumps([session_id, task_id]), raw_result=result)
         except Exception as exc:
             logger.debug("manifest post_tool_call failed open: %s", exc)
         return None
@@ -152,7 +151,7 @@ def register(ctx) -> None:
     ctx.register_middleware("tool_request", callbacks["tool_request"])
     ctx.register_hook("post_tool_call", callbacks["post_tool_call"])
     logger.info("manifest plugin: tool-call repair registered")
-    if os.environ.get("MNFST_HEAL_HTTP", "1") != "0":
+    if os.environ.get("MNFST_HEAL_HTTP", "0") == "1":
         try:
             from mnfst import manifest  # optional: transport-level healing for in-process HTTP
         except ImportError:

@@ -20,9 +20,9 @@ import urllib.request
 import uuid
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
 from dataclasses import dataclass
-from typing import Any, Callable, Mapping, Optional
+from typing import Any, Callable, Optional
 
-VERSION = "0.1.0"
+VERSION = "0.2.0"
 DEFAULT_URL = "https://api.manifest.build"
 RETRY_LINE = ("Manifest prepared corrected arguments for {tool}. "
               "Call {tool} again with the same arguments to apply them.")
@@ -65,11 +65,11 @@ def error_body(error_message: str, raw_result: Any = None) -> Any:
     the server's generic extractor reads; a bare string under `error` would
     fall through to its stringify fallback and carry no structure at all.
     """
-    if isinstance(raw_result, str):
+    for raw in (raw_result, error_message):
         try:
-            parsed = json.loads(raw_result)
-        except ValueError:
-            parsed = None
+            parsed = json.loads(raw) if isinstance(raw, str) else raw
+        except (ValueError, TypeError):
+            continue
         if isinstance(parsed, dict):
             for key in ("issues", "errors", "detail"):
                 value = parsed.get(key)
@@ -78,41 +78,17 @@ def error_body(error_message: str, raw_result: Any = None) -> Any:
     return {"error": {"message": error_message}}
 
 
-def tool_url(server: str, tool_name: str, host: Optional[str] = None) -> str:
-    """The failing call's URL.
-
-    Manifest reads the service from the host and the endpoint from the path, so
-    the MCP server's own host names the service and each tool is its own
-    endpoint. The server's real host is used when it can be read from the Hermes
-    configuration; the `mcp` scheme is the fallback when it cannot.
-
-    The router's real path is not used: it carries a per-agent session id, which
-    would give every agent a different endpoint and collapse all of its tools
-    into one.
-    """
-    if host:
-        return f"https://{host}/{tool_name}"
-    return f"mcp://{server}/{tool_name}"
-
-
-def tool_headers(server: str) -> dict:
-    """A tool call is not a plain HTTP request, and the headers say so.
-
-    The path is synthesized from the tool name, so a reader who would otherwise
-    try the URL gets told what this row is and which MCP server produced it.
-    """
-    return {"content-type": "application/json", "x-manifest-tool-call": "mcp",
-            "x-manifest-mcp-server": server}
-
-
 def heal_payload(*, trace_id: str, tool_name: str, server: str, args: Any, error_message: str,
-                 host: Optional[str] = None, raw_result: Any = None,
+                 service_url: Optional[str] = None, raw_result: Any = None,
                  response_time_ms: int = 0) -> dict:
+    target = {"protocol": "mcp", "server": server, "tool": tool_name}
+    if service_url:
+        target["serviceUrl"] = service_url
     return {
         "traceId": trace_id,
-        "request": {"method": "POST", "url": tool_url(server, tool_name, host),
-                    "headers": tool_headers(server), "body": traveling_body(args)},
-        "response": {"statusCode": 422, "body": error_body(error_message, raw_result),
+        "target": target,
+        "request": {"body": traveling_body(args)},
+        "response": {"isError": True, "body": error_body(error_message, raw_result),
                      "truncated": False},
         "responseTimeMs": int(response_time_ms),
     }
@@ -133,7 +109,7 @@ class HealClient:
 
     def _headers(self) -> dict:
         return {"authorization": f"Bearer {self.key}", "content-type": "application/json",
-                "user-agent": f"manifest-hermes/{VERSION}"}
+                "user-agent": f"mnfst-hermes/{VERSION}"}
 
     def enabled(self) -> bool:
         return self.clock() >= self._disabled_until
@@ -168,7 +144,7 @@ class HealClient:
             body = {"failure": {"kind": "not_attempted" if error == NOT_ATTEMPTED else "transport_error",
                                 "message": error or NOT_ATTEMPTED}}
         else:
-            body = {"response": {"statusCode": status_code}}
+            body = {"response": {"isError": status_code >= 400}}
             if error is not None:
                 body["response"].update(body=error, truncated=False)
 
@@ -189,8 +165,8 @@ class HealClient:
 
 # --- the loop -----------------------------------------------------------------
 
-def key_of(tool_name: str, args: Any) -> str:
-    return tool_name + "\x00" + json.dumps(args, sort_keys=True, default=str)
+def key_of(tool_name: str, args: Any, scope: str = "") -> str:
+    return json.dumps([scope, tool_name, args], sort_keys=True, default=str)
 
 
 @dataclass
@@ -213,19 +189,34 @@ class Healer:
         self._applied: dict[str, Pending] = {}  # key of patched args -> pending, for outcome
         self._lock = threading.Lock()
         self._pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="mnfst-heal")
+        self._slots = threading.BoundedSemaphore(4)
 
     def on_error(self, tool_name: str, args: dict, error_message: str,
                  raw_result: Any = None, server: str = "mcp",
-                 host: Optional[str] = None) -> Optional[dict]:
+                 service_url: Optional[str] = None, scope: str = "",
+                 response_time_ms: int = 0) -> Optional[dict]:
+        self.expire()
         with self._lock:
-            if key_of(tool_name, args) in self._burned:
+            if key_of(tool_name, args, scope) in self._burned:
                 return None
+            existing = self._pending.get(key_of(tool_name, args, scope))
+            if existing is not None:
+                return existing.args
+        if not self._slots.acquire(blocking=False):
+            return None
         try:
             payload = heal_payload(trace_id=uuid.uuid4().hex, tool_name=tool_name, server=server,
-                                   args=args, error_message=error_message, host=host,
-                                   raw_result=raw_result)
-            result = self._pool.submit(self.api.heal, payload).result(timeout=self.timeout)
+                                   args=args, error_message=error_message, service_url=service_url,
+                                   raw_result=raw_result, response_time_ms=response_time_ms)
+            future = self._pool.submit(self.api.heal, payload)
+        except Exception:
+            self._slots.release()
+            return None
+        future.add_done_callback(lambda _: self._slots.release())
+        try:
+            result = future.result(timeout=self.timeout)
         except FutureTimeout:
+            future.cancel()
             return None
         except Exception:
             return None
@@ -235,32 +226,42 @@ class Healer:
         body = healed.get("body") if isinstance(healed, dict) else None
         if not isinstance(body, dict):
             return None
+        # The server only knows the fields we sent. Keep withheld local credentials
+        # and refuse credential fields supplied by the remote repair.
+        body = {**traveling_body(body), **{k: v for k, v in args.items() if is_secret_field(k)}}
+        if body == args:
+            self._report(result.get("healAttemptId"), 0, NOT_ATTEMPTED)
+            return None
         with self._lock:
-            self._pending[key_of(tool_name, args)] = Pending(
+            self._pending[key_of(tool_name, args, scope)] = Pending(
                 tool_name, body, result.get("healAttemptId"), self.clock() + self.ttl)
         return body
 
-    def take(self, tool_name: str, args: dict) -> Optional[Pending]:
+    def take(self, tool_name: str, args: dict, scope: str = "") -> Optional[Pending]:
         self.expire()
         with self._lock:
-            pending = self._pending.pop(key_of(tool_name, args), None)
+            original_key = key_of(tool_name, args, scope)
+            pending = self._pending.pop(original_key, None)
             if pending is None:
                 return None
-            patched_key = key_of(tool_name, pending.args)
+            patched_key = key_of(tool_name, pending.args, scope)
+            self._burned[original_key] = self.clock() + self.ttl
             self._burned[patched_key] = self.clock() + self.ttl
             self._applied[patched_key] = pending
         return pending
 
     def outcome(self, tool_name: str, args: dict, status: Optional[str],
-                error_message: Optional[str]) -> None:
+                error_message: Optional[str], scope: str = "", raw_result: Any = None) -> None:
         with self._lock:
-            pending = self._applied.pop(key_of(tool_name, args), None)
+            pending = self._applied.pop(key_of(tool_name, args, scope), None)
         if pending is None:
             return
         if status == "ok":
             self._report(pending.attempt_id, 200)
+        elif status == "error":
+            self._report(pending.attempt_id, 422, error_body(error_message or "tool error", raw_result))
         else:
-            self._report(pending.attempt_id, 422, {"error": error_message or "tool error"})
+            self._report(pending.attempt_id, 0, NOT_ATTEMPTED)
 
     def expire(self) -> None:
         now = self.clock()
