@@ -1,11 +1,12 @@
 """The full sequence as Hermes fires it (model_tools.handle_function_call):
 tool_request middleware -> dispatch -> post_tool_call -> transform_tool_result."""
 import importlib.util
+import json
 import pathlib
 import sys
 import time
 
-from manifest_heal import Healer, HealClient, RETRY_LINE
+from manifest_heal import Healer, HealClient, RETRY_LINE, error_body
 from tests.stub_heal import StubHeal
 
 
@@ -65,7 +66,9 @@ def test_reject_then_repaired_retry():
         capture = stub.heals[0]
         assert capture["request"]["url"] == "mcp://list_issues"
         assert capture["request"]["body"] == {"sort": "occurrence_count"}  # token withheld
-        assert capture["response"] == {"statusCode": 422, "body": {"error": "invalid sort"}, "truncated": False}
+        assert capture["response"] == {"statusCode": 422,
+                                       "body": {"error": {"message": "invalid sort"}},
+                                       "truncated": False}
 
         second = hermes_call(cb, "list_issues", {"sort": "occurrence_count", "token": "s3cret"})
         assert second == '{"ok": true}'
@@ -175,3 +178,30 @@ def test_plugin_has_no_third_party_imports():
         text = (root / name).read_text()
         assert "from mnfst" not in text.replace("from mnfst import manifest  # optional", "")
         assert "import httpx" not in text and "import requests" not in text
+
+
+def test_validator_payloads_travel_untouched():
+    """The server recognizes Zod and Pydantic dialects and repairs by field path;
+    a free-text error travels as a message envelope instead."""
+    zod = '{"issues": [{"code": "invalid_enum_value", "path": ["sort"], "message": "bad sort"}]}'
+    assert error_body("bad sort", zod) == json.loads(zod)
+    pydantic = '{"detail": [{"type": "greater_than", "loc": ["body", "limit"], "msg": "too big"}]}'
+    assert error_body("too big", pydantic) == json.loads(pydantic)
+    nest = '{"errors": [{"code": "too_big", "path": ["limit"], "message": "max 100"}]}'
+    assert error_body("max 100", nest) == json.loads(nest)
+    assert error_body("plain text", '{"error": "plain text"}') == {"error": {"message": "plain text"}}
+    assert error_body("plain text", "not json at all") == {"error": {"message": "plain text"}}
+    assert error_body("plain text", '{"issues": []}') == {"error": {"message": "plain text"}}
+
+
+def test_a_validator_rejection_reaches_the_api_in_its_own_shape():
+    stub = StubHeal().start()
+    try:
+        stub.result = PATCHED
+        cb = load_plugin().build_callbacks(make(stub))
+        raw = '{"issues": [{"code": "invalid_enum_value", "path": ["sort"], "message": "bad sort"}]}'
+        cb["transform_tool_result"](tool_name="list_issues", args={"sort": "x"}, result=raw,
+                                    status="error", error_message="bad sort")
+        assert stub.heals[0]["response"]["body"] == json.loads(raw)
+    finally:
+        stub.stop()

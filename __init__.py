@@ -34,7 +34,7 @@ def build_callbacks(healer: Healer) -> Dict[str, Callable[..., Any]]:
         try:
             if status != "error" or not isinstance(result, str) or not isinstance(args, dict):
                 return None
-            patched = healer.on_error(tool_name, args, error_message or "")
+            patched = healer.on_error(tool_name, args, error_message or "", raw_result=result)
             return rewrite_result(result, tool_name) if patched is not None else None
         except Exception as exc:
             logger.debug("manifest transform_tool_result failed open: %s", exc)

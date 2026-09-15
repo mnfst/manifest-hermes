@@ -56,13 +56,36 @@ def traveling_body(body: Any) -> Any:
     return body
 
 
+def error_body(error_message: str, raw_result: Any = None) -> Any:
+    """The rejection as the heal API reads it.
+
+    A validator's own payload travels untouched: the server recognizes Zod
+    (`issues`/`errors`) and Pydantic (`detail`) and addresses the bad argument
+    by its field path. Anything else travels as a message envelope, the shape
+    the server's generic extractor reads; a bare string under `error` would
+    fall through to its stringify fallback and carry no structure at all.
+    """
+    if isinstance(raw_result, str):
+        try:
+            parsed = json.loads(raw_result)
+        except ValueError:
+            parsed = None
+        if isinstance(parsed, dict):
+            for key in ("issues", "errors", "detail"):
+                value = parsed.get(key)
+                if isinstance(value, list) and value:
+                    return parsed
+    return {"error": {"message": error_message}}
+
+
 def heal_payload(*, trace_id: str, tool_name: str, args: Any, error_message: str,
-                 response_time_ms: int = 0) -> dict:
+                 raw_result: Any = None, response_time_ms: int = 0) -> dict:
     return {
         "traceId": trace_id,
         "request": {"method": "POST", "url": f"mcp://{tool_name}",
                     "headers": {"content-type": "application/json"}, "body": traveling_body(args)},
-        "response": {"statusCode": 422, "body": {"error": error_message}, "truncated": False},
+        "response": {"statusCode": 422, "body": error_body(error_message, raw_result),
+                     "truncated": False},
         "responseTimeMs": int(response_time_ms),
     }
 
@@ -163,13 +186,14 @@ class Healer:
         self._lock = threading.Lock()
         self._pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="mnfst-heal")
 
-    def on_error(self, tool_name: str, args: dict, error_message: str) -> Optional[dict]:
+    def on_error(self, tool_name: str, args: dict, error_message: str,
+                 raw_result: Any = None) -> Optional[dict]:
         with self._lock:
             if key_of(tool_name, args) in self._burned:
                 return None
         try:
             payload = heal_payload(trace_id=uuid.uuid4().hex, tool_name=tool_name, args=args,
-                                   error_message=error_message)
+                                   error_message=error_message, raw_result=raw_result)
             result = self._pool.submit(self.api.heal, payload).result(timeout=self.timeout)
         except FutureTimeout:
             return None
