@@ -11,7 +11,12 @@ Set `MNFST_KEY` (your Manifest project key, with Autofix on) when prompted or in
 
 ## What it repairs
 
-Calls to external services only: Hermes' MCP tools, which is where an API contract exists for Manifest to learn from. Local tools (terminal, file, memory) are never sent anywhere and never rewritten. If an in-process tool of yours wraps an API, list its name prefix in `MNFST_TOOLS`.
+Calls to external services only. Two signals mark one, neither tied to a vendor:
+
+- an `mcp-<server>` toolset, which is how Hermes registers every MCP server's tools;
+- a non-empty `requires_env`, which is how a built-in tool declares the credential it needs to reach its API (`web_search` and the like).
+
+Local tools (terminal, file, memory) declare neither. They are never sent anywhere and never rewritten. A tool that matches neither signal counts as local, so an unreadable registry heals nothing rather than everything. If a tool is missed, list its name prefix in `MNFST_TOOLS`.
 
 ## How it works
 

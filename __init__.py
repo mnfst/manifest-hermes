@@ -4,9 +4,10 @@ A failed tool result is sent to the Manifest heal API. When a corrected set
 of arguments comes back, the model is told to call the tool again, and the
 retry runs with the corrected arguments. One heal, one retry, fail-open.
 
-Only calls to external services are repaired: Hermes' MCP tools, plus any
-name prefix listed in MNFST_TOOLS. A local tool (terminal, file, memory) is
-never touched.
+Only calls to external services are repaired: any MCP server's tools, and
+built-in tools that declare the credential they need (web_search and the
+like), plus any name prefix listed in MNFST_TOOLS. A local tool (terminal,
+file, memory) is never touched.
 
 Environment: MNFST_KEY (required), MNFST_URL (optional),
 MNFST_HEAL_TIMEOUT seconds (default 20), MNFST_TOOLS (comma-separated name
@@ -28,33 +29,43 @@ except ImportError:  # loaded flat, plugin directory on sys.path
 logger = logging.getLogger(__name__)
 
 
-def _toolset_of(tool_name: str) -> Optional[str]:
-    """The Hermes toolset a tool is registered under, or None when unknown."""
+def _tool_entry(tool_name: str):
+    """The Hermes registry entry for a tool, or None when it cannot be read."""
     try:
         from tools.registry import registry  # Hermes' own tool registry
-        entry = registry.get_entry(tool_name)
+        return registry.get_entry(tool_name)
     except Exception:
         return None
-    return getattr(entry, "toolset", None) if entry is not None else None
 
 
-def external_tool_filter(extra: tuple = (), toolset_of: Callable[[str], Optional[str]] = _toolset_of):
+def external_tool_filter(extra: tuple = (), entry_of: Callable[[str], Any] = _tool_entry):
     """The service a tool calls, or None when the tool is local.
 
-    Manifest learns a contract from an API's own rejections; a local tool has
-    none, and rewriting the arguments of a shell or file tool is not something
-    a remote service should do. Hermes registers MCP tools under `mcp-<server>`
-    toolsets, so the server names the service. A tool that cannot be placed
-    counts as local and is left alone. MNFST_TOOLS adds name prefixes for an
-    in-process tool that does wrap an API; the prefix names its service.
+    Manifest learns a contract from a service's own rejections. A local tool
+    has none, and rewriting the arguments of a shell or file tool is not
+    something a remote service should do. Two signals mark a call as external,
+    and neither is tied to one vendor:
+
+      * an `mcp-<server>` toolset, which is how Hermes registers every MCP
+        server's tools, whatever the server;
+      * a non-empty `requires_env`, which is how a built-in tool declares the
+        credential it needs to reach its API (`web_search`, `web_extract`,
+        and the other API-backed tools). Local tools declare none.
+
+    A tool that matches neither counts as local and is left alone, so an
+    unreadable registry heals nothing rather than everything. MNFST_TOOLS adds
+    name prefixes for a tool these signals miss; the prefix names its service.
     """
     def service_of(tool_name: str) -> Optional[str]:
-        toolset = toolset_of(tool_name)
+        entry = entry_of(tool_name)
+        toolset = getattr(entry, "toolset", None) if entry is not None else None
         if toolset and toolset.startswith("mcp-"):
             return toolset[len("mcp-"):].strip("-_") or "mcp"
+        if entry is not None and getattr(entry, "requires_env", None) and toolset:
+            return toolset.strip("-_")
         for prefix in extra:
             if tool_name.startswith(prefix):
-                return prefix.strip("-_") or "mcp"
+                return prefix.strip("-_") or "tool"
         return None
 
     return service_of

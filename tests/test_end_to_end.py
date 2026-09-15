@@ -218,17 +218,38 @@ def test_a_validator_rejection_reaches_the_api_in_its_own_shape():
         stub.stop()
 
 
-def test_only_external_tools_are_repaired():
-    """A local tool has no API contract to learn, so it is never sent anywhere."""
+class Entry:
+    def __init__(self, toolset, requires_env=()):
+        self.toolset, self.requires_env = toolset, list(requires_env)
+
+
+REGISTRY = {
+    # every MCP server, not one vendor
+    "list_issues": Entry("mcp-composio"),
+    "search_tickets": Entry("mcp-linear"),
+    # built-in tools that reach an API declare the credential they need
+    "web_search": Entry("web", ["FIRECRAWL_API_KEY"]),
+    "web_extract": Entry("web", ["FIRECRAWL_API_KEY"]),
+    # local tools declare none
+    "terminal": Entry("terminal"),
+    "read_file": Entry("file"),
+    "memory": Entry("memory"),
+}
+
+
+def test_every_api_tool_is_repaired_and_no_local_one_is():
     plugin = load_plugin()
-    toolsets = {"list_issues": "mcp-composio", "terminal": "core", "read_file": "files"}
-    service_of = plugin.external_tool_filter(toolset_of=toolsets.get)
-    assert service_of("list_issues") == "composio"   # names the service, not the tool
+    service_of = plugin.external_tool_filter(entry_of=REGISTRY.get)
+    assert service_of("list_issues") == "composio"
+    assert service_of("search_tickets") == "linear"      # any MCP server, not just Composio
+    assert service_of("web_search") == "web"             # built-in, but it calls an API
+    assert service_of("web_extract") == "web"
     assert service_of("terminal") is None
     assert service_of("read_file") is None
-    assert service_of("never_registered") is None    # unplaceable counts as local
+    assert service_of("memory") is None
+    assert service_of("never_registered") is None        # unplaceable counts as local
 
-    extended = plugin.external_tool_filter(extra=("github_",), toolset_of=toolsets.get)
+    extended = plugin.external_tool_filter(extra=("github_",), entry_of=REGISTRY.get)
     assert extended("github_create_issue") == "github"
     assert extended("terminal") is None
 
@@ -238,8 +259,7 @@ def test_a_local_tool_failure_never_reaches_the_api():
     try:
         stub.result = PATCHED
         plugin = load_plugin()
-        cb = plugin.build_callbacks(make(stub),
-                                    plugin.external_tool_filter(toolset_of={"list_issues": "mcp-x"}.get))
+        cb = plugin.build_callbacks(make(stub), plugin.external_tool_filter(entry_of=REGISTRY.get))
         out = cb["transform_tool_result"](tool_name="terminal", args={"command": "rm -rf /tmp/x"},
                                           result='{"error": "exit 1"}', status="error",
                                           error_message="exit 1")
@@ -258,5 +278,5 @@ def test_a_local_tool_failure_never_reaches_the_api():
 def test_registry_lookup_without_hermes_places_nothing():
     """Outside Hermes the registry import fails; the filter then heals nothing."""
     plugin = load_plugin()
-    assert plugin._toolset_of("anything") is None
+    assert plugin._tool_entry("anything") is None
     assert plugin.external_tool_filter()("anything") is None
