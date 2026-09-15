@@ -227,23 +227,22 @@ REGISTRY = {
     # every MCP server, not one vendor
     "list_issues": Entry("mcp-composio"),
     "search_tickets": Entry("mcp-linear"),
-    # built-in tools that reach an API declare the credential they need
+    # built-in tools, API-backed or not, are out of scope
     "web_search": Entry("web", ["FIRECRAWL_API_KEY"]),
     "web_extract": Entry("web", ["FIRECRAWL_API_KEY"]),
-    # local tools declare none
     "terminal": Entry("terminal"),
     "read_file": Entry("file"),
     "memory": Entry("memory"),
 }
 
 
-def test_every_api_tool_is_repaired_and_no_local_one_is():
+def test_only_mcp_tools_are_repaired():
     plugin = load_plugin()
     service_of = plugin.external_tool_filter(entry_of=REGISTRY.get)
     assert service_of("list_issues") == "composio"
     assert service_of("search_tickets") == "linear"      # any MCP server, not just Composio
-    assert service_of("web_search") == "web"             # built-in, but it calls an API
-    assert service_of("web_extract") == "web"
+    assert service_of("web_search") is None              # built-in, even though it calls an API
+    assert service_of("web_extract") is None
     assert service_of("terminal") is None
     assert service_of("read_file") is None
     assert service_of("memory") is None
