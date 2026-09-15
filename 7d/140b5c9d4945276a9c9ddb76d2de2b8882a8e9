@@ -1,0 +1,41 @@
+__init__.py
+  s_dd4a4da13d42c9::t_f5c5231b87110a 56,58-59,63
+  s_dd4a4da13d42c9::t_78fee9c8d11638 12-13,19,39-40,43-44,47-49,51-52,72,87,93-94,97-98,105-107,113-114,118,127-128,131-132,154
+pyproject.toml
+  s_dd4a4da13d42c9::t_f5c5231b87110a 5
+  s_dd4a4da13d42c9::t_adc272f536954f 9
+plugin.yaml
+  s_dd4a4da13d42c9::t_78fee9c8d11638 2
+skills/manifest/SKILL.md
+  s_dd4a4da13d42c9::t_d4d12223b22117 10,12
+manifest_heal.py
+  s_dd4a4da13d42c9::t_78fee9c8d11638 23,25,68,70-72,82,84-86,89-91,112,147,168-169,192,196-198,200,202-206,209-217,219,229-234,236,240,243-244,247-248,254,256,261-262,264
+tests/mcp_fixture.py
+  s_dd4a4da13d42c9::t_adc272f536954f 1-21
+tests/test_end_to_end.py
+  s_dd4a4da13d42c9::t_90569c2c46c9e1 9,59-61,74-76,78,87,90-92,119-120,194-198,278,294
+README.md
+  s_dd4a4da13d42c9::t_d4d12223b22117 43
+  s_dd4a4da13d42c9::t_e1a376a88ea7bd 3,16,18-29,33,35-37,44-53
+tests/test_mcp_transports.py
+  s_dd4a4da13d42c9::t_adc272f536954f 1-120
+tests/test_retry_scope.py
+  s_dd4a4da13d42c9::t_d4d12223b22117 3,106-125
+  s_dd4a4da13d42c9::t_adc272f536954f 1-2,4-105
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "7d140b5c9d4945276a9c9ddb76d2de2b8882a8e9",
+  "prompts": {},
+  "sessions": {
+    "s_dd4a4da13d42c9": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0a507-46f2-7272-92b7-b1d64628a00f",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Guillaume Gay <guillaume.gay@protonmail.com>"
+    }
+  }
+}
