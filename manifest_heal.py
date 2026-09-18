@@ -12,6 +12,7 @@ five-minute pause when the project is disabled server-side.
 from __future__ import annotations
 
 import json
+import os
 import re
 import threading
 import time
@@ -20,12 +21,15 @@ import urllib.request
 import uuid
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Callable, Mapping, Optional
 
-VERSION = "0.1.0"
+VERSION = "0.2.0"
 DEFAULT_URL = "https://api.manifest.build"
-RETRY_LINE = ("Manifest prepared corrected arguments for {tool}. "
-              "Call {tool} again with the same arguments to apply them.")
+# Captures of MCP tool calls carry a dedicated status so the backend can segment
+# them from plain HTTP traffic. 424 Failed Dependency: the transport succeeded
+# (the router answered) but the tool execution it depended on failed.
+TOOL_CALL_STATUS = 424
 NOT_ATTEMPTED = "replay_not_attempted"
 DISABLE_SECONDS = 300.0
 MAX_INFLIGHT_REPORTS = 64
@@ -112,7 +116,7 @@ def heal_payload(*, trace_id: str, tool_name: str, server: str, args: Any, error
         "traceId": trace_id,
         "request": {"method": "POST", "url": tool_url(server, tool_name, host),
                     "headers": tool_headers(server), "body": traveling_body(args)},
-        "response": {"statusCode": 422, "body": error_body(error_message, raw_result),
+        "response": {"statusCode": TOOL_CALL_STATUS, "body": error_body(error_message, raw_result),
                      "truncated": False},
         "responseTimeMs": int(response_time_ms),
     }
@@ -193,6 +197,31 @@ def key_of(tool_name: str, args: Any) -> str:
     return tool_name + "\x00" + json.dumps(args, sort_keys=True, default=str)
 
 
+# --- local measurement sink (plugin-side only; no prompt/runtime changes) -----
+# Every heal attempt, verdict, and retry outcome appends one JSON line to
+# HERMES_TRACE_DIR (default ~/.hermes/logs/hermes-trace). That stream is what
+# measures potential: attempts -> patches -> retries succeeded.
+
+def _trace_sink() -> Optional[str]:
+    if os.environ.get("MNFST_HEAL_LOG", "1").strip().lower() in {"0", "false", "no", "off"}:
+        return None
+    return os.environ.get("HERMES_TRACE_DIR") or str(
+        Path.home() / ".hermes" / "logs" / "hermes-trace")
+
+
+def _trace_emit(event: str, data: dict) -> None:
+    try:
+        path = _trace_sink()
+        if not path:
+            return
+        record = {"ts": time.time(), "event": event, "source": "manifest-plugin"}
+        record.update(data)
+        with open(Path(path) / "events.jsonl", "a", encoding="utf-8") as handle:
+            handle.write(json.dumps(record, default=str, ensure_ascii=False) + "\n")
+    except Exception:
+        pass
+
+
 @dataclass
 class Pending:
     tool_name: str
@@ -226,15 +255,27 @@ class Healer:
                                    raw_result=raw_result)
             result = self._pool.submit(self.api.heal, payload).result(timeout=self.timeout)
         except FutureTimeout:
+            _trace_emit("heal_attempt", {"tool": tool_name, "server": server, "args": args,
+                                         "error": error_message, "verdict": "timeout"})
             return None
         except Exception:
+            _trace_emit("heal_attempt", {"tool": tool_name, "server": server, "args": args,
+                                         "error": error_message, "verdict": "transport_error"})
             return None
         if not isinstance(result, dict) or result.get("status") not in ("patched", "unverified"):
+            verdict = result.get("status") if isinstance(result, dict) else "unusable_response"
+            _trace_emit("heal_attempt", {"tool": tool_name, "server": server, "args": args,
+                                         "error": error_message, "verdict": verdict})
             return None
         healed = result.get("healedRequest")
         body = healed.get("body") if isinstance(healed, dict) else None
         if not isinstance(body, dict):
+            _trace_emit("heal_attempt", {"tool": tool_name, "server": server, "args": args,
+                                         "error": error_message, "verdict": "patch_missing_body"})
             return None
+        _trace_emit("heal_attempt", {"tool": tool_name, "server": server, "args": args,
+                                     "error": error_message, "verdict": result.get("status"),
+                                     "patch": body, "attempt_id": result.get("healAttemptId")})
         with self._lock:
             self._pending[key_of(tool_name, args)] = Pending(
                 tool_name, body, result.get("healAttemptId"), self.clock() + self.ttl)
@@ -258,8 +299,15 @@ class Healer:
         if pending is None:
             return
         if status == "ok":
+            _trace_emit("heal_outcome", {"tool": tool_name, "attempt_id": pending.attempt_id,
+                                         "patched_args": pending.args,
+                                         "retry_result": "success", "status_code": 200})
             self._report(pending.attempt_id, 200)
         else:
+            _trace_emit("heal_outcome", {"tool": tool_name, "attempt_id": pending.attempt_id,
+                                         "patched_args": pending.args,
+                                         "retry_result": "failed",
+                                         "error": error_message or "tool error", "status_code": 422})
             self._report(pending.attempt_id, 422, {"error": error_message or "tool error"})
 
     def expire(self) -> None:

@@ -19,11 +19,31 @@ Built-in tools are never repaired, including API-backed ones such as `web_search
 
 ## How it works
 
-`transform_tool_result` sends a failed tool result to the Manifest heal API. With corrected arguments, the model is told to call the tool again; the `tool_request` middleware applies them on that call; `post_tool_call` reports the outcome. One heal, one retry per failure. Anything unexpected passes the original result through.
+`transform_tool_result` sends a failed tool result to the Manifest heal API. When
+corrected arguments come back, the plugin **re-invokes the tool itself** with the
+patched arguments and returns the healed result. The model never sees Manifest,
+a retry instruction, or the repair — it only ever sees the tool's response,
+healed or not. One heal and one internal retry per failure; anything unexpected
+passes the original result through.
+
+Captures carry `statusCode: 424` (Failed Dependency — the transport succeeded but
+the tool execution it depended on failed) plus the `x-manifest-tool-call: mcp` and
+`x-manifest-mcp-server` headers, so the backend can segment tool calls from plain
+HTTP traffic. No Hermes middleware is used, so the plugin runs on any Hermes version.
+
+## Measuring
+
+With `MNFST_HEAL_LOG=1` (the default), every heal attempt and retry outcome appends
+one JSON line to `$HERMES_TRACE_DIR/events.jsonl` (default `~/.hermes/logs/hermes-trace/`):
+
+    heal_attempt  {tool, args, error, verdict: patched|no_patch|timeout|transport_error, patch?, attempt_id}
+    heal_outcome  {tool, attempt_id, patched_args, retry_result: success|failed, status_code}
+
+The funnel — attempts → patches → retries succeeded — is the effectiveness measure.
 
 If the `mnfst` package happens to be installed in the Hermes environment, HTTP calls made by tools inside the Hermes process are healed at the transport level too. Set `MNFST_HEAL_HTTP=0` to skip that.
 
-Environment: `MNFST_KEY`, `MNFST_URL` (optional), `MNFST_HEAL_TIMEOUT` (seconds, default 20), `MNFST_TOOLS` (extra external name prefixes), `MNFST_HEAL_HTTP`.
+Environment: `MNFST_KEY`, `MNFST_URL` (optional), `MNFST_HEAL_TIMEOUT` (seconds, default 20), `MNFST_TOOLS` (extra external name prefixes), `MNFST_HEAL_HTTP`, `MNFST_HEAL_LOG` (measurement sink, default on).
 
 ## Privacy
 

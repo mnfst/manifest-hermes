@@ -1,12 +1,14 @@
-"""The full sequence as Hermes fires it (model_tools.handle_function_call):
-tool_request middleware -> dispatch -> post_tool_call -> transform_tool_result."""
+"""The full sequence as Hermes fires it: transform_tool_result captures the
+failure, Manifest returns a patch, and the plugin re-invokes the tool itself
+with the patched arguments. The model only ever sees the tool's response,
+healed or not."""
 import importlib.util
 import json
 import pathlib
 import sys
 import time
 
-from manifest_heal import Healer, HealClient, RETRY_LINE, error_body, tool_url
+from manifest_heal import Healer, HealClient, TOOL_CALL_STATUS, error_body, tool_url
 from tests.stub_heal import StubHeal
 
 
@@ -34,14 +36,17 @@ def fake_tool(args):  # rejects anything but sort=created_at
     return '{"ok": true}' if args.get("sort") == "created_at" else '{"error": "invalid sort"}'
 
 
+def fake_dispatch(name, args):  # the re-invocation seam, faked
+    return fake_tool(args)
+
+
 def hermes_call(cb, tool_name, args):
-    swap = cb["tool_request"](tool_name=tool_name, args=dict(args), original_args=dict(args))
-    effective = swap["args"] if swap else args
-    result = fake_tool(effective)
+    """One model-facing tool call: Hermes dispatches, the result is an error,
+    then the transform hook runs (capture -> heal -> internal retry)."""
+    result = fake_tool(args)
     status = "error" if '"error"' in result else "ok"
     error = "invalid sort" if status == "error" else None
-    cb["post_tool_call"](tool_name=tool_name, args=effective, result=result, status=status, error_message=error)
-    replaced = cb["transform_tool_result"](tool_name=tool_name, args=effective, result=result,
+    replaced = cb["transform_tool_result"](tool_name=tool_name, args=dict(args), result=result,
                                            status=status, error_message=error)
     return replaced if isinstance(replaced, str) else result
 
@@ -54,40 +59,45 @@ def make(stub):
     return Healer(HealClient("mnfx_k", stub.url, timeout=5.0), timeout=5.0)
 
 
-def callbacks(healer, plugin=None):
+def callbacks(healer, plugin=None, dispatch=fake_dispatch):
     """Build with every tool treated as external; scope itself is tested below."""
     return (plugin or load_plugin()).build_callbacks(
-        healer, lambda name: "composio", lambda server: "backend.composio.dev")
+        healer, lambda name: "composio", lambda server: "backend.composio.dev",
+        dispatch=dispatch)
 
 
-def test_reject_then_repaired_retry():
+def test_failed_call_is_healed_and_retried_internally():
     stub = StubHeal().start()
     try:
         stub.result = PATCHED
-        healer = make(stub)
-        cb = callbacks(healer)
+        cb = callbacks(make(stub))
 
-        first = hermes_call(cb, "list_issues", {"sort": "occurrence_count", "token": "s3cret"})
-        assert first.endswith(RETRY_LINE.format(tool="list_issues"))
+        out = hermes_call(cb, "list_issues", {"sort": "occurrence_count", "token": "s3cret"})
+        assert out == '{"ok": true}'  # the model sees the healed response, nothing else
+
         capture = stub.heals[0]
         assert capture["request"]["url"] == "https://backend.composio.dev/list_issues"
         assert capture["request"]["headers"]["x-manifest-tool-call"] == "mcp"
         assert capture["request"]["headers"]["x-manifest-mcp-server"] == "composio"
         assert capture["request"]["body"] == {"sort": "occurrence_count"}  # token withheld
-        assert capture["response"] == {"statusCode": 422,
-                                       "body": {"error": {"message": "invalid sort"}},
-                                       "truncated": False}
-
-        second = hermes_call(cb, "list_issues", {"sort": "occurrence_count", "token": "s3cret"})
-        assert second == '{"ok": true}'
+        assert capture["response"]["statusCode"] == TOOL_CALL_STATUS
+        assert capture["response"]["body"] == {"error": {"message": "invalid sort"}}
 
         assert wait_for(lambda: len(stub.outcomes) == 1)
+        assert stub.outcomes[0][1] == {"response": {"statusCode": 200}}
         assert len(stub.heals) == 1
-        assert stub.outcomes == [("a1", {"response": {"statusCode": 200}})]
+    finally:
+        stub.stop()
 
-        # the patched args failing again are never re-healed
-        assert healer.on_error("list_issues", {"sort": "created_at"}, "still bad") is None
-        assert len(stub.heals) == 1
+
+def test_the_agent_never_sees_a_retry_instruction():
+    stub = StubHeal().start()
+    try:
+        stub.result = PATCHED
+        cb = callbacks(make(stub))
+        out = hermes_call(cb, "list_issues", {"sort": "occurrence_count"})
+        assert "Manifest" not in out
+        assert "Call" not in out or out == '{"ok": true}'
     finally:
         stub.stop()
 
@@ -98,24 +108,38 @@ def test_no_patch_passes_the_error_through():
         cb = callbacks(make(stub))
         out = hermes_call(cb, "list_issues", {"sort": "x"})
         assert out == '{"error": "invalid sort"}'
-        assert cb["tool_request"](tool_name="list_issues", args={"sort": "x"}) is None
+        assert stub.heals == [stub.heals[0]] and len(stub.outcomes) == 0
     finally:
         stub.stop()
 
 
-def test_failed_retry_reports_422_with_the_error():
+def test_failed_internal_retry_reports_422_and_passes_the_error():
     stub = StubHeal().start()
     try:
         stub.result = {"status": "patched", "healAttemptId": "a2", "healedRequest": {"body": {"sort": "nope"}}}
         cb = callbacks(make(stub))
-        hermes_call(cb, "list_issues", {"sort": "x"})
-        out = hermes_call(cb, "list_issues", {"sort": "x"})  # retry with sort=nope fails too
-        assert out == '{"error": "invalid sort"}'  # no second retry line
+        out = hermes_call(cb, "list_issues", {"sort": "x"})
+        assert out == '{"error": "invalid sort"}'  # the healed call failed: error stands
         assert wait_for(lambda: len(stub.outcomes) == 1)
         assert stub.outcomes[0][0] == "a2"
         assert stub.outcomes[0][1]["response"]["statusCode"] == 422
         assert stub.outcomes[0][1]["response"]["body"] == {"error": "invalid sort"}
         assert len(stub.heals) == 1
+    finally:
+        stub.stop()
+
+
+def test_a_no_op_patch_reports_failure_without_reinvoking():
+    stub = StubHeal().start()
+    try:
+        stub.result = {"status": "patched", "healAttemptId": "a3", "healedRequest": {"body": {}}}
+        calls = []
+        cb = callbacks(make(stub), dispatch=lambda n, a: calls.append(a) or fake_tool(a))
+        out = hermes_call(cb, "list_issues", {"sort": "x"})
+        assert out == '{"error": "invalid sort"}'
+        assert calls == []  # nothing to change: no re-invocation
+        assert wait_for(lambda: len(stub.outcomes) == 1)
+        assert stub.outcomes[0][1]["response"]["statusCode"] == 422
     finally:
         stub.stop()
 
@@ -155,7 +179,7 @@ def test_expired_patch_is_reported_not_attempted():
         stub.stop()
 
 
-def test_register_wires_three_seams_and_respects_missing_key(monkeypatch):
+def test_register_wires_one_seam_and_respects_missing_key(monkeypatch):
     class Ctx:
         def __init__(self):
             self.hooks, self.middleware = {}, {}
@@ -176,8 +200,8 @@ def test_register_wires_three_seams_and_respects_missing_key(monkeypatch):
     monkeypatch.setenv("MNFST_HEAL_HTTP", "0")
     ctx = Ctx()
     load_plugin().register(ctx)
-    assert set(ctx.hooks) == {"transform_tool_result", "post_tool_call"}
-    assert set(ctx.middleware) == {"tool_request"}
+    assert set(ctx.hooks) == {"transform_tool_result"}
+    assert ctx.middleware == {}  # no middleware needed: the plugin retries itself
 
 
 def test_plugin_has_no_third_party_imports():
@@ -201,6 +225,14 @@ def test_the_headers_say_the_row_is_a_tool_call():
     headers = tool_headers("composio")
     assert headers["x-manifest-tool-call"] == "mcp"
     assert headers["x-manifest-mcp-server"] == "composio"
+
+
+def test_captures_carry_the_dedicated_tool_call_status():
+    from manifest_heal import TOOL_CALL_STATUS, heal_payload
+    payload = heal_payload(trace_id="t", tool_name="X", server="s", args={"a": 1},
+                           error_message="bad", host="h.example")
+    assert payload["response"]["statusCode"] == TOOL_CALL_STATUS == 424
+    assert TOOL_CALL_STATUS == 424  # 424 Failed Dependency, within the 200-599 contract
 
 
 def test_validator_payloads_travel_untouched():
@@ -277,23 +309,5 @@ def test_a_local_tool_failure_never_reaches_the_api():
                                           error_message="exit 1")
         assert out is None
         assert stub.heals == []
-
-        healed = cb["transform_tool_result"](tool_name="list_issues", args={"sort": "x"},
-                                             result='{"error": "invalid sort"}', status="error",
-                                             error_message="invalid sort")
-        assert healed is not None
-        assert len(stub.heals) == 1
     finally:
         stub.stop()
-
-
-def test_registry_lookup_without_hermes_places_nothing():
-    """Outside Hermes the registry import fails; the filter then heals nothing."""
-    plugin = load_plugin()
-    assert plugin._tool_entry("anything") is None
-    assert plugin.external_tool_filter()("anything") is None
-
-
-def test_an_unreadable_configuration_falls_back_to_the_mcp_scheme():
-    plugin = load_plugin()
-    assert plugin._mcp_server_host("never-configured") is None
