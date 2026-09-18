@@ -250,6 +250,15 @@ def test_validator_payloads_travel_untouched():
     assert error_body("plain text", '{"issues": []}') == {"error": {"message": "plain text"}}
 
 
+def test_openai_shaped_errors_travel_untouched():
+    """code/param/type are backend identity inputs - collapsing the shape would
+    route the capture to a different issue."""
+    raw = json.dumps({"error": {"message": "Unknown parameter: 'max_tokens'.",
+                                "type": "invalid_request_error", "param": "max_tokens",
+                                "code": "unknown_parameter"}})
+    assert error_body("Unknown parameter: 'max_tokens'.", raw) == json.loads(raw)
+
+
 def test_a_validator_rejection_reaches_the_api_in_its_own_shape():
     stub = StubHeal().start()
     try:

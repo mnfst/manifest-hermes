@@ -80,6 +80,11 @@ def error_body(error_message: str, raw_result: Any = None) -> Any:
                 value = parsed.get(key)
                 if isinstance(value, list) and value:
                     return parsed
+            # OpenAI-shaped errors travel untouched too: code/param/type are
+            # identity inputs on the backend (dropping them changes the fingerprint).
+            err = parsed.get("error")
+            if isinstance(err, dict) and isinstance(err.get("message"), str) and err["message"]:
+                return parsed
     return {"error": {"message": error_message}}
 
 
@@ -163,6 +168,8 @@ class HealClient:
         if not self.enabled():
             return None
         status, body = self._call("POST", "/v1/heal", payload)
+        if os.environ.get("MNFST_HEAL_DEBUG", "").strip().lower() in {"1", "true", "yes", "on"}:
+            _trace_emit("heal_debug", {"http_status": status, "response": body, "payload": payload})
         if status == 403 and isinstance(body, dict) and body.get("error") == "project_disabled":
             self._disabled_until = self.clock() + DISABLE_SECONDS
             return None
