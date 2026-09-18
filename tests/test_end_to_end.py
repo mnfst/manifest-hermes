@@ -270,6 +270,17 @@ def test_hermes_wrapped_tool_errors_are_unwrapped():
                                                   "code": "unknown_parameter"}}
 
 
+def test_a_stringified_message_is_unwrapped_too():
+    """Hermes' envelope can nest the error one level deeper: the message field
+    itself carries the stringified error object."""
+    wrapped = json.dumps({"error": {"message": json.dumps({
+        "message": "Unknown parameter: 'max_tokens'.", "type": "invalid_request_error",
+        "param": "max_tokens", "code": "unknown_parameter"})}})
+    assert error_body("x", wrapped) == {"error": {"message": "Unknown parameter: 'max_tokens'.",
+                                                  "type": "invalid_request_error", "param": "max_tokens",
+                                                  "code": "unknown_parameter"}}
+
+
 def test_a_validator_rejection_reaches_the_api_in_its_own_shape():
     stub = StubHeal().start()
     try:
