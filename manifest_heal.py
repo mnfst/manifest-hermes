@@ -82,9 +82,15 @@ def error_body(error_message: str, raw_result: Any = None) -> Any:
                     return parsed
             # OpenAI-shaped errors travel untouched too: code/param/type are
             # identity inputs on the backend (dropping them changes the fingerprint).
+            # Hermes wraps tool errors as {error: "<stringified json>"} - unwrap once.
             err = parsed.get("error")
+            if isinstance(err, str):
+                try:
+                    err = json.loads(err)
+                except Exception:
+                    err = None
             if isinstance(err, dict) and isinstance(err.get("message"), str) and err["message"]:
-                return parsed
+                return {"error": err}
     return {"error": {"message": error_message}}
 
 

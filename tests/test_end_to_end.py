@@ -259,6 +259,17 @@ def test_openai_shaped_errors_travel_untouched():
     assert error_body("Unknown parameter: 'max_tokens'.", raw) == json.loads(raw)
 
 
+def test_hermes_wrapped_tool_errors_are_unwrapped():
+    """Hermes wraps a failed MCP tool result as {error: "<stringified json>"} -
+    the inner shape (code/param) must survive, or the fingerprint drifts."""
+    wrapped = json.dumps({"error": json.dumps({"message": "Unknown parameter: 'max_tokens'.",
+                                               "type": "invalid_request_error", "param": "max_tokens",
+                                               "code": "unknown_parameter"})})
+    assert error_body("x", wrapped) == {"error": {"message": "Unknown parameter: 'max_tokens'.",
+                                                  "type": "invalid_request_error", "param": "max_tokens",
+                                                  "code": "unknown_parameter"}}
+
+
 def test_a_validator_rejection_reaches_the_api_in_its_own_shape():
     stub = StubHeal().start()
     try:
