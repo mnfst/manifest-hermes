@@ -1,0 +1,19 @@
+manifest_heal.py
+  s_e88e06c2b77b2b::t_94a1594055c12b 139,141
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "d35936c5146c5b362d30a9c946c43606ed791e84",
+  "prompts": {},
+  "sessions": {
+    "s_e88e06c2b77b2b": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_f4c8c8bb9ffeKzTvM6tdfgOWNS",
+        "model": "auto"
+      },
+      "human_author": "Guillaume Gay <guillaume.gay@protonmail.com>"
+    }
+  }
+}
