@@ -136,8 +136,9 @@ class HealClient:
         self._pending: list[threading.Thread] = []
 
     def _headers(self) -> dict:
+        # Same client convention as the SDKs: mnfst-node/x, mnfst-python/x.
         return {"authorization": f"Bearer {self.key}", "content-type": "application/json",
-                "user-agent": f"manifest-hermes/{VERSION}"}
+                "user-agent": f"mnfst-hermes/{VERSION}"}
 
     def enabled(self) -> bool:
         return self.clock() >= self._disabled_until
