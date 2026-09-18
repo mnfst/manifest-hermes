@@ -47,12 +47,31 @@ def _tool_entry(tool_name: str):
 _HOSTS: Dict[str, Optional[str]] = {}
 
 
+def _host_map() -> Dict[str, str]:
+    """Optional `MNFST_HOST_MAP=server=host,...` overrides for capture URLs.
+
+    Useful when a stdio MCP server fronts a known API host (tests, gateways):
+    the map wins over the config-derived URL host.
+    """
+    raw = os.environ.get("MNFST_HOST_MAP", "")
+    out: Dict[str, str] = {}
+    for pair in raw.split(","):
+        if "=" in pair:
+            key, _, value = pair.partition("=")
+            if key.strip() and value.strip():
+                out[key.strip()] = value.strip()
+    return out
+
+
 def _mcp_server_host(server: str) -> Optional[str]:
     """The host of a configured MCP server, from Hermes' own configuration.
 
     Cached: the lookup parses the config file, and the answer cannot change
-    without a restart.
+    without a restart. `MNFST_HOST_MAP` overrides per server.
     """
+    override = _host_map().get(server)
+    if override:
+        return override
     if server in _HOSTS:
         return _HOSTS[server]
     host = None

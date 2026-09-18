@@ -311,3 +311,12 @@ def test_a_local_tool_failure_never_reaches_the_api():
         assert stub.heals == []
     finally:
         stub.stop()
+
+
+def test_host_map_overrides_the_config_host(monkeypatch):
+    plugin = load_plugin()
+    monkeypatch.setenv("MNFST_HOST_MAP", " trace-echo = api.openai.com , other = h2.example ")
+    monkeypatch.setattr(plugin, "_HOSTS", {})
+    assert plugin._mcp_server_host("trace-echo") == "api.openai.com"
+    assert plugin._mcp_server_host("other") == "h2.example"
+    assert plugin._mcp_server_host("unmapped") is None  # falls through to config lookup
