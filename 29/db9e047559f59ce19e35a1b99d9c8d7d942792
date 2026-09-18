@@ -1,0 +1,21 @@
+manifest_heal.py
+  s_e88e06c2b77b2b::t_bf4473572fc130 85-87,94-100
+tests/test_end_to_end.py
+  s_e88e06c2b77b2b::t_3c51fa0df65984 271-281
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "29db9e047559f59ce19e35a1b99d9c8d7d942792",
+  "prompts": {},
+  "sessions": {
+    "s_e88e06c2b77b2b": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_f4c8c8bb9ffeKzTvM6tdfgOWNS",
+        "model": "auto"
+      },
+      "human_author": "Guillaume Gay <guillaume.gay@protonmail.com>"
+    }
+  }
+}
