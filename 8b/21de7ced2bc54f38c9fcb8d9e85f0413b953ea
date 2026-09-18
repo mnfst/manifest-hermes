@@ -1,0 +1,21 @@
+__init__.py
+  s_e88e06c2b77b2b::t_85ce6415fbd38f 50-65,70,72-74
+tests/test_end_to_end.py
+  s_e88e06c2b77b2b::t_29444358a491ac 314-322
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "8b21de7ced2bc54f38c9fcb8d9e85f0413b953ea",
+  "prompts": {},
+  "sessions": {
+    "s_e88e06c2b77b2b": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_f4c8c8bb9ffeKzTvM6tdfgOWNS",
+        "model": "auto"
+      },
+      "human_author": "Guillaume Gay <guillaume.gay@protonmail.com>"
+    }
+  }
+}
