@@ -1,0 +1,34 @@
+__init__.py
+  s_e88e06c2b77b2b::t_7966d59a8d5b7e 3-7,12-15,18-21,25,31,33,99-133,139,141-145,147,158-160,165-167,169-172,174-176,178-182,184,187,191-192,197-198
+  s_e88e06c2b77b2b::t_50b93390db2a0e 168,173,177
+tests/test_end_to_end.py
+  s_e88e06c2b77b2b::t_1276185b8e7592 1-4,11,39-42,44-46,49,62,65-66,69,73-76,83-84,87,89-90,92-100,111,116,121-122,132-146,182,203-204,230-237
+manifest_heal.py
+  s_e88e06c2b77b2b::t_8fe71a976b485e 15,24
+  s_e88e06c2b77b2b::t_36bbf65a954bb8 200-224
+  s_e88e06c2b77b2b::t_e3e721a4da95dd 119
+  s_e88e06c2b77b2b::t_aeef49e757e8f5 302-304,307-310
+  s_e88e06c2b77b2b::t_fa8edfece95446 258-259,262-263,266-268,273-274,276-278
+  s_e88e06c2b77b2b::t_f88cab6ff4148d 27,29-32
+README.md
+  s_e88e06c2b77b2b::t_2cee1580cb9d56 22-42
+  s_e88e06c2b77b2b::t_a296f6ba5ee3d4 46
+plugin.yaml
+  s_e88e06c2b77b2b::t_890cbd9696ab1d 2
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "81900c0ec00659212012712c24557565d2f9cb39",
+  "prompts": {},
+  "sessions": {
+    "s_e88e06c2b77b2b": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_f4c8c8bb9ffeKzTvM6tdfgOWNS",
+        "model": "auto"
+      },
+      "human_author": "Guillaume Gay <guillaume.gay@protonmail.com>"
+    }
+  }
+}
