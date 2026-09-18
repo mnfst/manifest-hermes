@@ -26,10 +26,11 @@ from typing import Any, Callable, Mapping, Optional
 
 VERSION = "0.2.0"
 DEFAULT_URL = "https://api.manifest.build"
-# Captures of MCP tool calls carry a dedicated status so the backend can segment
-# them from plain HTTP traffic. 424 Failed Dependency: the transport succeeded
-# (the router answered) but the tool execution it depended on failed.
-TOOL_CALL_STATUS = 424
+# Captures of MCP tool calls carry a dedicated sentinel status so the backend can
+# segment them from plain HTTP traffic. 418 is permanently reserved (RFC 2324 /
+# RFC 9110), so no real API failure can ever collide with the synthetic envelope;
+# the code travels inside the capture body, never as a wire status.
+TOOL_CALL_STATUS = 418
 NOT_ATTEMPTED = "replay_not_attempted"
 DISABLE_SECONDS = 300.0
 MAX_INFLIGHT_REPORTS = 64

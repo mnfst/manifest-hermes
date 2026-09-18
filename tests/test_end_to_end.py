@@ -231,8 +231,9 @@ def test_captures_carry_the_dedicated_tool_call_status():
     from manifest_heal import TOOL_CALL_STATUS, heal_payload
     payload = heal_payload(trace_id="t", tool_name="X", server="s", args={"a": 1},
                            error_message="bad", host="h.example")
-    assert payload["response"]["statusCode"] == TOOL_CALL_STATUS == 424
-    assert TOOL_CALL_STATUS == 424  # 424 Failed Dependency, within the 200-599 contract
+    assert payload["response"]["statusCode"] == TOOL_CALL_STATUS == 418
+    # 418 is permanently reserved (RFC 2324/9110): no real failure can collide with it.
+    assert 400 <= TOOL_CALL_STATUS < 500  # request-side, per the ingest's isRequestSide
 
 
 def test_validator_payloads_travel_untouched():
