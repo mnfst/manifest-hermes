@@ -1,7 +1,9 @@
 manifest_heal.py
   s_fd9f854db2d37a::t_4fab8e34f71b49 64-93,115-116
+  s_fd9f854db2d37a::t_b54f8e01edbaa2 64-93,115-116
 tests/test_end_to_end.py
   s_fd9f854db2d37a::t_b58fddbb611efb 284-298
+  s_fd9f854db2d37a::t_297e9c0385b1a8 284-298
 ---
 {
   "schema_version": "authorship/3.0.0",
