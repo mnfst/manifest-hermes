@@ -1,0 +1,23 @@
+__init__.py
+  s_fd9f854db2d37a::t_062d16e85479f2 31,33,184-187
+manifest_heal.py
+  s_fd9f854db2d37a::t_0319fa5cd81988 64-77
+tests/test_end_to_end.py
+  s_fd9f854db2d37a::t_00e709ec7a0578 132-151
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "106a506b23f26aa9102a07c4ad6b309697991e24",
+  "prompts": {},
+  "sessions": {
+    "s_fd9f854db2d37a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "bc366a9d-960d-4c35-b05f-9fc6b2bd9ca3",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Guillaume Gay <guillaume.gay@protonmail.com>"
+    }
+  }
+}
