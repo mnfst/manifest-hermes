@@ -1,0 +1,21 @@
+README.md
+  s_fd9f854db2d37a::t_e310ed778d67c8 29-32
+__init__.py
+  s_fd9f854db2d37a::t_f617bda0c1783e 12-15
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "d0660089b56968fa0f7bd17d4d64a8720e84fed8",
+  "prompts": {},
+  "sessions": {
+    "s_fd9f854db2d37a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "bc366a9d-960d-4c35-b05f-9fc6b2bd9ca3",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Guillaume Gay <guillaume.gay@protonmail.com>"
+    }
+  }
+}
