@@ -61,6 +61,36 @@ def traveling_body(body: Any) -> Any:
     return body
 
 
+def _unwrap_error(value: Any, depth: int = 4) -> Optional[dict]:
+    """The tool's own error object, however deeply Hermes wrapped it.
+
+    Hermes hands the plugin `{"error": <object or string>}`, and what it carries
+    may be an envelope again: another `{"error": ...}`, or a `message` that is
+    itself the stringified error. Each layer is peeled until the object holding
+    the real message is in hand, because the `type`/`param`/`code` beside that
+    message are identity inputs on the backend - collapsing them to a bare
+    message changes the fingerprint and the capture lands on the wrong issue.
+    """
+    if depth <= 0:
+        return None
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except ValueError:
+            return None
+    if not isinstance(value, dict):
+        return None
+    # An inner envelope always wins over the wrapper it arrived in.
+    nested = _unwrap_error(value.get("error"), depth - 1)
+    if nested is not None:
+        return nested
+    message = value.get("message")
+    if isinstance(message, str) and message:
+        encoded = _unwrap_error(message, depth - 1)
+        return encoded if encoded is not None else value
+    return None
+
+
 def error_body(error_message: str, raw_result: Any = None) -> Any:
     """The rejection as the heal API reads it.
 
@@ -82,23 +112,8 @@ def error_body(error_message: str, raw_result: Any = None) -> Any:
                     return parsed
             # OpenAI-shaped errors travel untouched too: code/param/type are
             # identity inputs on the backend (dropping them changes the fingerprint).
-            # Hermes wraps tool errors as {error: "<stringified json>"} or
-            # {error: {message: "<stringified json>"}} - unwrap until the real
-            # error object (message/type/param/code) is recovered.
-            err = parsed.get("error")
-            if isinstance(err, str):
-                try:
-                    err = json.loads(err)
-                except Exception:
-                    err = None
-            if isinstance(err, dict) and isinstance(err.get("message"), str) and err["message"][:1] in "{\"":
-                try:
-                    inner = json.loads(err["message"])
-                    if isinstance(inner, dict) and inner.get("message"):
-                        err = inner
-                except Exception:
-                    pass
-            if isinstance(err, dict) and isinstance(err.get("message"), str) and err["message"]:
+            err = _unwrap_error(parsed.get("error"))
+            if err is not None:
                 return {"error": err}
     return {"error": {"message": error_message}}
 

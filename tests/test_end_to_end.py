@@ -281,6 +281,21 @@ def test_a_stringified_message_is_unwrapped_too():
                                                   "code": "unknown_parameter"}}
 
 
+def test_a_stringified_envelope_under_error_is_unwrapped():
+    """The shape Hermes actually produces for an MCP tool error: `error` holds the
+    stringified envelope, so the real error object sits two levels down. Stopping
+    one level short sends a bare message and the capture lands on a different
+    fingerprint than the issue it belongs to."""
+    inner = {"error": {"message": "Unknown parameter: 'max_tokens'.",
+                       "type": "invalid_request_error", "param": "max_tokens",
+                       "code": "unknown_parameter"}}
+    wrapped = json.dumps({"error": json.dumps(inner)})
+    assert error_body("tool rejected", wrapped) == {
+        "error": {"message": "Unknown parameter: 'max_tokens'.",
+                  "type": "invalid_request_error", "param": "max_tokens",
+                  "code": "unknown_parameter"}}
+
+
 def test_a_validator_rejection_reaches_the_api_in_its_own_shape():
     stub = StubHeal().start()
     try:
