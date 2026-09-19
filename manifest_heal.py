@@ -61,6 +61,20 @@ def traveling_body(body: Any) -> Any:
     return body
 
 
+def healed_args(args: dict, body: dict) -> dict:
+    """The arguments to retry the tool with.
+
+    The served body is the whole healed body, not an overlay: an operation that
+    *removes* or *moves* an argument expresses itself as that key's absence, so
+    layering the body over the original arguments would resurrect exactly the
+    argument the patch took out. The body therefore wins, and only the
+    credential-named fields withheld from the capture are put back - the server
+    never saw them, so it could not have echoed them.
+    """
+    withheld = {k: v for k, v in args.items() if is_secret_field(k) and k not in body}
+    return {**body, **withheld}
+
+
 def _unwrap_error(value: Any, depth: int = 4) -> Optional[dict]:
     """The tool's own error object, however deeply Hermes wrapped it.
 

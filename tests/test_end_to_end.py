@@ -129,6 +129,26 @@ def test_failed_internal_retry_reports_422_and_passes_the_error():
         stub.stop()
 
 
+def test_a_removed_argument_stays_removed_on_the_retry():
+    """A `move` patch expresses itself as the old key's absence from the served
+    body. Layering that body over the original arguments would send the removed
+    argument again, and the tool would reject the retry with the same error."""
+    stub = StubHeal().start()
+    try:
+        stub.result = {"status": "patched", "issueId": "i1", "healAttemptId": "a4",
+                       "healedRequest": {"body": {"model": "gpt-5", "max_completion_tokens": 4096}}}
+        sent = []
+        cb = callbacks(make(stub),
+                       dispatch=lambda n, a: (sent.append(a), '{"ok": true}')[1])
+        out = hermes_call(cb, "chat_stub",
+                         {"model": "gpt-5", "max_tokens": 4096, "api_key": "s3cret"})
+        assert out == '{"ok": true}'
+        # max_tokens is gone, and the withheld credential is restored
+        assert sent == [{"model": "gpt-5", "max_completion_tokens": 4096, "api_key": "s3cret"}]
+    finally:
+        stub.stop()
+
+
 def test_a_no_op_patch_reports_failure_without_reinvoking():
     stub = StubHeal().start()
     try:

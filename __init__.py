@@ -28,9 +28,9 @@ import os
 from typing import Any, Callable, Dict, Optional
 
 try:  # loaded as a package by Hermes
-    from .manifest_heal import DEFAULT_URL, HealClient, Healer
+    from .manifest_heal import DEFAULT_URL, HealClient, Healer, healed_args
 except ImportError:  # loaded flat, plugin directory on sys.path
-    from manifest_heal import DEFAULT_URL, HealClient, Healer  # type: ignore
+    from manifest_heal import DEFAULT_URL, HealClient, Healer, healed_args  # type: ignore
 
 logger = logging.getLogger(__name__)
 
@@ -181,9 +181,10 @@ def build_callbacks(healer: Healer,
             pending = healer.take(tool_name, args)
             if pending is None:
                 return None
-            merged = {**args, **patch}
-            if merged == args:
-                # a no-op patch cannot fix anything; report and pass the error through
+            merged = healed_args(args, patch)
+            if merged == args or not merged:
+                # Nothing changed, or nothing is left to send: either way the patch
+                # cannot fix anything, so report it and pass the error through.
                 healer.outcome(tool_name, pending.args, "error", error_message or "tool error")
                 return None
             try:
