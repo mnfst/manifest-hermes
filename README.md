@@ -26,6 +26,13 @@ a retry instruction, or the repair — it only ever sees the tool's response,
 healed or not. One heal and one internal retry per failure; anything unexpected
 passes the original result through.
 
+The retry is a real Hermes tool call (`handle_function_call`), not a bare registry
+dispatch: it runs through the `pre_tool_call` policy hooks, edit approval, the
+tool-execution middleware and the `post_tool_call` observers with the original
+call's identity, so server-dictated arguments get every check the first call got
+and other plugins see the retry. A patch that changes nothing, or a retry that
+never reaches the tool, is reported as *not attempted* rather than as a failure.
+
 Captures carry `statusCode: 418` — the sentinel for a tool call rather than a
 wire status. 418 is permanently reserved (RFC 2324 / RFC 9110), so no real API
 failure can collide with the synthetic envelope. The `x-manifest-tool-call: mcp`
@@ -38,13 +45,15 @@ With `MNFST_HEAL_LOG=1` (the default), every heal attempt and retry outcome appe
 one JSON line to `$HERMES_TRACE_DIR/events.jsonl` (default `~/.hermes/logs/hermes-trace/`):
 
     heal_attempt  {tool, args, error, verdict: patched|no_patch|timeout|transport_error, patch?, attempt_id}
-    heal_outcome  {tool, attempt_id, patched_args, retry_result: success|failed, status_code}
+    heal_outcome  {tool, attempt_id, patched_args, retry_result: success|failed|not_attempted, status_code?}
 
 The funnel — attempts → patches → retries succeeded — is the effectiveness measure.
+The directory is created on first write. Logged arguments are the ones that
+travelled: credential-named fields are withheld here as well as on the wire.
 
 If the `mnfst` package happens to be installed in the Hermes environment, HTTP calls made by tools inside the Hermes process are healed at the transport level too. Set `MNFST_HEAL_HTTP=0` to skip that.
 
-Environment: `MNFST_KEY`, `MNFST_URL` (optional), `MNFST_HEAL_TIMEOUT` (seconds, default 20), `MNFST_TOOLS` (extra external name prefixes), `MNFST_HEAL_HTTP`, `MNFST_HEAL_LOG` (measurement sink, default on).
+Environment: `MNFST_KEY`, `MNFST_URL` (optional), `MNFST_HEAL_TIMEOUT` (seconds, default 20), `MNFST_TOOLS` (extra external name prefixes), `MNFST_HOST_MAP` (`server=host,...` overrides for the capture host when a stdio server fronts a known API; a URL is reduced to its host), `MNFST_HEAL_HTTP`, `MNFST_HEAL_LOG` (measurement sink, default on).
 
 ## Privacy
 
