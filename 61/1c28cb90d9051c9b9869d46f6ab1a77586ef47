@@ -1,0 +1,27 @@
+README.md
+  s_4da576b0972d15::t_cf043721e8d98e 29-35,48,51-52,56
+__init__.py
+  s_4da576b0972d15::t_6f95176d566f10 5-8,20-22,31,33,36-37,39-40,44-47,59-65,72-73,75-78,80-84,104,168-186,190-195,199,203-204,207-214,218,220-221,231,233-235,238,240,243-246,248,265-266
+manifest_heal.py
+  s_4da576b0972d15::t_60016d65539e68 3-4,25,105-108,256-257,273,281-282,284,289,296-299,306,309,313,318,320-328,330-346
+tests/conftest.py
+  s_4da576b0972d15::t_e734fb9727dc44 1-7
+tests/test_end_to_end.py
+  s_4da576b0972d15::t_52648a76b118f7 39,99,125-126,142,152-154,159,164-232,256-261,265-271,301-325,403-414,498,502-515
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "611c28cb90d9051c9b9869d46f6ab1a77586ef47",
+  "prompts": {},
+  "sessions": {
+    "s_4da576b0972d15": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "004378bd-f430-472d-aa07-de7b1a891ec3",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "Guillaume Gay <guillaume.gay@protonmail.com>"
+    }
+  }
+}
