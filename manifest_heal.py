@@ -12,6 +12,7 @@ five-minute pause when the project is disabled server-side.
 from __future__ import annotations
 
 import json
+import os
 import re
 import threading
 import time
@@ -20,12 +21,16 @@ import urllib.request
 import uuid
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Callable, Mapping, Optional
 
-VERSION = "0.1.0"
+VERSION = "0.2.0"
 DEFAULT_URL = "https://api.manifest.build"
-RETRY_LINE = ("Manifest prepared corrected arguments for {tool}. "
-              "Call {tool} again with the same arguments to apply them.")
+# Captures of MCP tool calls carry a dedicated sentinel status so the backend can
+# segment them from plain HTTP traffic. 418 is permanently reserved (RFC 2324 /
+# RFC 9110), so no real API failure can ever collide with the synthetic envelope;
+# the code travels inside the capture body, never as a wire status.
+TOOL_CALL_STATUS = 418
 NOT_ATTEMPTED = "replay_not_attempted"
 DISABLE_SECONDS = 300.0
 MAX_INFLIGHT_REPORTS = 64
@@ -56,6 +61,50 @@ def traveling_body(body: Any) -> Any:
     return body
 
 
+def healed_args(args: dict, body: dict) -> dict:
+    """The arguments to retry the tool with.
+
+    The served body is the whole healed body, not an overlay: an operation that
+    *removes* or *moves* an argument expresses itself as that key's absence, so
+    layering the body over the original arguments would resurrect exactly the
+    argument the patch took out. The body therefore wins, and only the
+    credential-named fields withheld from the capture are put back - the server
+    never saw them, so it could not have echoed them.
+    """
+    withheld = {k: v for k, v in args.items() if is_secret_field(k) and k not in body}
+    return {**body, **withheld}
+
+
+def _unwrap_error(value: Any, depth: int = 4) -> Optional[dict]:
+    """The tool's own error object, however deeply Hermes wrapped it.
+
+    Hermes hands the plugin `{"error": <object or string>}`, and what it carries
+    may be an envelope again: another `{"error": ...}`, or a `message` that is
+    itself the stringified error. Each layer is peeled until the object holding
+    the real message is in hand, because the `type`/`param`/`code` beside that
+    message are identity inputs on the backend - collapsing them to a bare
+    message changes the fingerprint and the capture lands on the wrong issue.
+    """
+    if depth <= 0:
+        return None
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except ValueError:
+            return None
+    if not isinstance(value, dict):
+        return None
+    # An inner envelope always wins over the wrapper it arrived in.
+    nested = _unwrap_error(value.get("error"), depth - 1)
+    if nested is not None:
+        return nested
+    message = value.get("message")
+    if isinstance(message, str) and message:
+        encoded = _unwrap_error(message, depth - 1)
+        return encoded if encoded is not None else value
+    return None
+
+
 def error_body(error_message: str, raw_result: Any = None) -> Any:
     """The rejection as the heal API reads it.
 
@@ -75,6 +124,11 @@ def error_body(error_message: str, raw_result: Any = None) -> Any:
                 value = parsed.get(key)
                 if isinstance(value, list) and value:
                     return parsed
+            # OpenAI-shaped errors travel untouched too: code/param/type are
+            # identity inputs on the backend (dropping them changes the fingerprint).
+            err = _unwrap_error(parsed.get("error"))
+            if err is not None:
+                return {"error": err}
     return {"error": {"message": error_message}}
 
 
@@ -112,7 +166,7 @@ def heal_payload(*, trace_id: str, tool_name: str, server: str, args: Any, error
         "traceId": trace_id,
         "request": {"method": "POST", "url": tool_url(server, tool_name, host),
                     "headers": tool_headers(server), "body": traveling_body(args)},
-        "response": {"statusCode": 422, "body": error_body(error_message, raw_result),
+        "response": {"statusCode": TOOL_CALL_STATUS, "body": error_body(error_message, raw_result),
                      "truncated": False},
         "responseTimeMs": int(response_time_ms),
     }
@@ -132,8 +186,9 @@ class HealClient:
         self._pending: list[threading.Thread] = []
 
     def _headers(self) -> dict:
+        # Same client convention as the SDKs: mnfst-node/x, mnfst-python/x.
         return {"authorization": f"Bearer {self.key}", "content-type": "application/json",
-                "user-agent": f"manifest-hermes/{VERSION}"}
+                "user-agent": f"mnfst-hermes/{VERSION}"}
 
     def enabled(self) -> bool:
         return self.clock() >= self._disabled_until
@@ -157,6 +212,8 @@ class HealClient:
         if not self.enabled():
             return None
         status, body = self._call("POST", "/v1/heal", payload)
+        if os.environ.get("MNFST_HEAL_DEBUG", "").strip().lower() in {"1", "true", "yes", "on"}:
+            _trace_emit("heal_debug", {"http_status": status, "response": body, "payload": payload})
         if status == 403 and isinstance(body, dict) and body.get("error") == "project_disabled":
             self._disabled_until = self.clock() + DISABLE_SECONDS
             return None
@@ -193,6 +250,31 @@ def key_of(tool_name: str, args: Any) -> str:
     return tool_name + "\x00" + json.dumps(args, sort_keys=True, default=str)
 
 
+# --- local measurement sink (plugin-side only; no prompt/runtime changes) -----
+# Every heal attempt, verdict, and retry outcome appends one JSON line to
+# HERMES_TRACE_DIR (default ~/.hermes/logs/hermes-trace). That stream is what
+# measures potential: attempts -> patches -> retries succeeded.
+
+def _trace_sink() -> Optional[str]:
+    if os.environ.get("MNFST_HEAL_LOG", "1").strip().lower() in {"0", "false", "no", "off"}:
+        return None
+    return os.environ.get("HERMES_TRACE_DIR") or str(
+        Path.home() / ".hermes" / "logs" / "hermes-trace")
+
+
+def _trace_emit(event: str, data: dict) -> None:
+    try:
+        path = _trace_sink()
+        if not path:
+            return
+        record = {"ts": time.time(), "event": event, "source": "manifest-plugin"}
+        record.update(data)
+        with open(Path(path) / "events.jsonl", "a", encoding="utf-8") as handle:
+            handle.write(json.dumps(record, default=str, ensure_ascii=False) + "\n")
+    except Exception:
+        pass
+
+
 @dataclass
 class Pending:
     tool_name: str
@@ -226,15 +308,27 @@ class Healer:
                                    raw_result=raw_result)
             result = self._pool.submit(self.api.heal, payload).result(timeout=self.timeout)
         except FutureTimeout:
+            _trace_emit("heal_attempt", {"tool": tool_name, "server": server, "args": args,
+                                         "error": error_message, "verdict": "timeout"})
             return None
         except Exception:
+            _trace_emit("heal_attempt", {"tool": tool_name, "server": server, "args": args,
+                                         "error": error_message, "verdict": "transport_error"})
             return None
         if not isinstance(result, dict) or result.get("status") not in ("patched", "unverified"):
+            verdict = result.get("status") if isinstance(result, dict) else "unusable_response"
+            _trace_emit("heal_attempt", {"tool": tool_name, "server": server, "args": args,
+                                         "error": error_message, "verdict": verdict})
             return None
         healed = result.get("healedRequest")
         body = healed.get("body") if isinstance(healed, dict) else None
         if not isinstance(body, dict):
+            _trace_emit("heal_attempt", {"tool": tool_name, "server": server, "args": args,
+                                         "error": error_message, "verdict": "patch_missing_body"})
             return None
+        _trace_emit("heal_attempt", {"tool": tool_name, "server": server, "args": args,
+                                     "error": error_message, "verdict": result.get("status"),
+                                     "patch": body, "attempt_id": result.get("healAttemptId")})
         with self._lock:
             self._pending[key_of(tool_name, args)] = Pending(
                 tool_name, body, result.get("healAttemptId"), self.clock() + self.ttl)
@@ -258,8 +352,15 @@ class Healer:
         if pending is None:
             return
         if status == "ok":
+            _trace_emit("heal_outcome", {"tool": tool_name, "attempt_id": pending.attempt_id,
+                                         "patched_args": pending.args,
+                                         "retry_result": "success", "status_code": 200})
             self._report(pending.attempt_id, 200)
         else:
+            _trace_emit("heal_outcome", {"tool": tool_name, "attempt_id": pending.attempt_id,
+                                         "patched_args": pending.args,
+                                         "retry_result": "failed",
+                                         "error": error_message or "tool error", "status_code": 422})
             self._report(pending.attempt_id, 422, {"error": error_message or "tool error"})
 
     def expire(self) -> None:

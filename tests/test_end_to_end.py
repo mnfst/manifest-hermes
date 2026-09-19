@@ -1,12 +1,14 @@
-"""The full sequence as Hermes fires it (model_tools.handle_function_call):
-tool_request middleware -> dispatch -> post_tool_call -> transform_tool_result."""
+"""The full sequence as Hermes fires it: transform_tool_result captures the
+failure, Manifest returns a patch, and the plugin re-invokes the tool itself
+with the patched arguments. The model only ever sees the tool's response,
+healed or not."""
 import importlib.util
 import json
 import pathlib
 import sys
 import time
 
-from manifest_heal import Healer, HealClient, RETRY_LINE, error_body, tool_url
+from manifest_heal import Healer, HealClient, TOOL_CALL_STATUS, error_body, tool_url
 from tests.stub_heal import StubHeal
 
 
@@ -34,14 +36,17 @@ def fake_tool(args):  # rejects anything but sort=created_at
     return '{"ok": true}' if args.get("sort") == "created_at" else '{"error": "invalid sort"}'
 
 
+def fake_dispatch(name, args):  # the re-invocation seam, faked
+    return fake_tool(args)
+
+
 def hermes_call(cb, tool_name, args):
-    swap = cb["tool_request"](tool_name=tool_name, args=dict(args), original_args=dict(args))
-    effective = swap["args"] if swap else args
-    result = fake_tool(effective)
+    """One model-facing tool call: Hermes dispatches, the result is an error,
+    then the transform hook runs (capture -> heal -> internal retry)."""
+    result = fake_tool(args)
     status = "error" if '"error"' in result else "ok"
     error = "invalid sort" if status == "error" else None
-    cb["post_tool_call"](tool_name=tool_name, args=effective, result=result, status=status, error_message=error)
-    replaced = cb["transform_tool_result"](tool_name=tool_name, args=effective, result=result,
+    replaced = cb["transform_tool_result"](tool_name=tool_name, args=dict(args), result=result,
                                            status=status, error_message=error)
     return replaced if isinstance(replaced, str) else result
 
@@ -54,40 +59,45 @@ def make(stub):
     return Healer(HealClient("mnfx_k", stub.url, timeout=5.0), timeout=5.0)
 
 
-def callbacks(healer, plugin=None):
+def callbacks(healer, plugin=None, dispatch=fake_dispatch):
     """Build with every tool treated as external; scope itself is tested below."""
     return (plugin or load_plugin()).build_callbacks(
-        healer, lambda name: "composio", lambda server: "backend.composio.dev")
+        healer, lambda name: "composio", lambda server: "backend.composio.dev",
+        dispatch=dispatch)
 
 
-def test_reject_then_repaired_retry():
+def test_failed_call_is_healed_and_retried_internally():
     stub = StubHeal().start()
     try:
         stub.result = PATCHED
-        healer = make(stub)
-        cb = callbacks(healer)
+        cb = callbacks(make(stub))
 
-        first = hermes_call(cb, "list_issues", {"sort": "occurrence_count", "token": "s3cret"})
-        assert first.endswith(RETRY_LINE.format(tool="list_issues"))
+        out = hermes_call(cb, "list_issues", {"sort": "occurrence_count", "token": "s3cret"})
+        assert out == '{"ok": true}'  # the model sees the healed response, nothing else
+
         capture = stub.heals[0]
         assert capture["request"]["url"] == "https://backend.composio.dev/list_issues"
         assert capture["request"]["headers"]["x-manifest-tool-call"] == "mcp"
         assert capture["request"]["headers"]["x-manifest-mcp-server"] == "composio"
         assert capture["request"]["body"] == {"sort": "occurrence_count"}  # token withheld
-        assert capture["response"] == {"statusCode": 422,
-                                       "body": {"error": {"message": "invalid sort"}},
-                                       "truncated": False}
-
-        second = hermes_call(cb, "list_issues", {"sort": "occurrence_count", "token": "s3cret"})
-        assert second == '{"ok": true}'
+        assert capture["response"]["statusCode"] == TOOL_CALL_STATUS
+        assert capture["response"]["body"] == {"error": {"message": "invalid sort"}}
 
         assert wait_for(lambda: len(stub.outcomes) == 1)
+        assert stub.outcomes[0][1] == {"response": {"statusCode": 200}}
         assert len(stub.heals) == 1
-        assert stub.outcomes == [("a1", {"response": {"statusCode": 200}})]
+    finally:
+        stub.stop()
 
-        # the patched args failing again are never re-healed
-        assert healer.on_error("list_issues", {"sort": "created_at"}, "still bad") is None
-        assert len(stub.heals) == 1
+
+def test_the_agent_never_sees_a_retry_instruction():
+    stub = StubHeal().start()
+    try:
+        stub.result = PATCHED
+        cb = callbacks(make(stub))
+        out = hermes_call(cb, "list_issues", {"sort": "occurrence_count"})
+        assert "Manifest" not in out
+        assert "Call" not in out or out == '{"ok": true}'
     finally:
         stub.stop()
 
@@ -98,24 +108,58 @@ def test_no_patch_passes_the_error_through():
         cb = callbacks(make(stub))
         out = hermes_call(cb, "list_issues", {"sort": "x"})
         assert out == '{"error": "invalid sort"}'
-        assert cb["tool_request"](tool_name="list_issues", args={"sort": "x"}) is None
+        assert stub.heals == [stub.heals[0]] and len(stub.outcomes) == 0
     finally:
         stub.stop()
 
 
-def test_failed_retry_reports_422_with_the_error():
+def test_failed_internal_retry_reports_422_and_passes_the_error():
     stub = StubHeal().start()
     try:
         stub.result = {"status": "patched", "healAttemptId": "a2", "healedRequest": {"body": {"sort": "nope"}}}
         cb = callbacks(make(stub))
-        hermes_call(cb, "list_issues", {"sort": "x"})
-        out = hermes_call(cb, "list_issues", {"sort": "x"})  # retry with sort=nope fails too
-        assert out == '{"error": "invalid sort"}'  # no second retry line
+        out = hermes_call(cb, "list_issues", {"sort": "x"})
+        assert out == '{"error": "invalid sort"}'  # the healed call failed: error stands
         assert wait_for(lambda: len(stub.outcomes) == 1)
         assert stub.outcomes[0][0] == "a2"
         assert stub.outcomes[0][1]["response"]["statusCode"] == 422
         assert stub.outcomes[0][1]["response"]["body"] == {"error": "invalid sort"}
         assert len(stub.heals) == 1
+    finally:
+        stub.stop()
+
+
+def test_a_removed_argument_stays_removed_on_the_retry():
+    """A `move` patch expresses itself as the old key's absence from the served
+    body. Layering that body over the original arguments would send the removed
+    argument again, and the tool would reject the retry with the same error."""
+    stub = StubHeal().start()
+    try:
+        stub.result = {"status": "patched", "issueId": "i1", "healAttemptId": "a4",
+                       "healedRequest": {"body": {"model": "gpt-5", "max_completion_tokens": 4096}}}
+        sent = []
+        cb = callbacks(make(stub),
+                       dispatch=lambda n, a: (sent.append(a), '{"ok": true}')[1])
+        out = hermes_call(cb, "chat_stub",
+                         {"model": "gpt-5", "max_tokens": 4096, "api_key": "s3cret"})
+        assert out == '{"ok": true}'
+        # max_tokens is gone, and the withheld credential is restored
+        assert sent == [{"model": "gpt-5", "max_completion_tokens": 4096, "api_key": "s3cret"}]
+    finally:
+        stub.stop()
+
+
+def test_a_no_op_patch_reports_failure_without_reinvoking():
+    stub = StubHeal().start()
+    try:
+        stub.result = {"status": "patched", "healAttemptId": "a3", "healedRequest": {"body": {}}}
+        calls = []
+        cb = callbacks(make(stub), dispatch=lambda n, a: calls.append(a) or fake_tool(a))
+        out = hermes_call(cb, "list_issues", {"sort": "x"})
+        assert out == '{"error": "invalid sort"}'
+        assert calls == []  # nothing to change: no re-invocation
+        assert wait_for(lambda: len(stub.outcomes) == 1)
+        assert stub.outcomes[0][1]["response"]["statusCode"] == 422
     finally:
         stub.stop()
 
@@ -155,7 +199,7 @@ def test_expired_patch_is_reported_not_attempted():
         stub.stop()
 
 
-def test_register_wires_three_seams_and_respects_missing_key(monkeypatch):
+def test_register_wires_one_seam_and_respects_missing_key(monkeypatch):
     class Ctx:
         def __init__(self):
             self.hooks, self.middleware = {}, {}
@@ -176,8 +220,8 @@ def test_register_wires_three_seams_and_respects_missing_key(monkeypatch):
     monkeypatch.setenv("MNFST_HEAL_HTTP", "0")
     ctx = Ctx()
     load_plugin().register(ctx)
-    assert set(ctx.hooks) == {"transform_tool_result", "post_tool_call"}
-    assert set(ctx.middleware) == {"tool_request"}
+    assert set(ctx.hooks) == {"transform_tool_result"}
+    assert ctx.middleware == {}  # no middleware needed: the plugin retries itself
 
 
 def test_plugin_has_no_third_party_imports():
@@ -203,6 +247,15 @@ def test_the_headers_say_the_row_is_a_tool_call():
     assert headers["x-manifest-mcp-server"] == "composio"
 
 
+def test_captures_carry_the_dedicated_tool_call_status():
+    from manifest_heal import TOOL_CALL_STATUS, heal_payload
+    payload = heal_payload(trace_id="t", tool_name="X", server="s", args={"a": 1},
+                           error_message="bad", host="h.example")
+    assert payload["response"]["statusCode"] == TOOL_CALL_STATUS == 418
+    # 418 is permanently reserved (RFC 2324/9110): no real failure can collide with it.
+    assert 400 <= TOOL_CALL_STATUS < 500  # request-side, per the ingest's isRequestSide
+
+
 def test_validator_payloads_travel_untouched():
     """The server recognizes Zod and Pydantic dialects and repairs by field path;
     a free-text error travels as a message envelope instead."""
@@ -215,6 +268,52 @@ def test_validator_payloads_travel_untouched():
     assert error_body("plain text", '{"error": "plain text"}') == {"error": {"message": "plain text"}}
     assert error_body("plain text", "not json at all") == {"error": {"message": "plain text"}}
     assert error_body("plain text", '{"issues": []}') == {"error": {"message": "plain text"}}
+
+
+def test_openai_shaped_errors_travel_untouched():
+    """code/param/type are backend identity inputs - collapsing the shape would
+    route the capture to a different issue."""
+    raw = json.dumps({"error": {"message": "Unknown parameter: 'max_tokens'.",
+                                "type": "invalid_request_error", "param": "max_tokens",
+                                "code": "unknown_parameter"}})
+    assert error_body("Unknown parameter: 'max_tokens'.", raw) == json.loads(raw)
+
+
+def test_hermes_wrapped_tool_errors_are_unwrapped():
+    """Hermes wraps a failed MCP tool result as {error: "<stringified json>"} -
+    the inner shape (code/param) must survive, or the fingerprint drifts."""
+    wrapped = json.dumps({"error": json.dumps({"message": "Unknown parameter: 'max_tokens'.",
+                                               "type": "invalid_request_error", "param": "max_tokens",
+                                               "code": "unknown_parameter"})})
+    assert error_body("x", wrapped) == {"error": {"message": "Unknown parameter: 'max_tokens'.",
+                                                  "type": "invalid_request_error", "param": "max_tokens",
+                                                  "code": "unknown_parameter"}}
+
+
+def test_a_stringified_message_is_unwrapped_too():
+    """Hermes' envelope can nest the error one level deeper: the message field
+    itself carries the stringified error object."""
+    wrapped = json.dumps({"error": {"message": json.dumps({
+        "message": "Unknown parameter: 'max_tokens'.", "type": "invalid_request_error",
+        "param": "max_tokens", "code": "unknown_parameter"})}})
+    assert error_body("x", wrapped) == {"error": {"message": "Unknown parameter: 'max_tokens'.",
+                                                  "type": "invalid_request_error", "param": "max_tokens",
+                                                  "code": "unknown_parameter"}}
+
+
+def test_a_stringified_envelope_under_error_is_unwrapped():
+    """The shape Hermes actually produces for an MCP tool error: `error` holds the
+    stringified envelope, so the real error object sits two levels down. Stopping
+    one level short sends a bare message and the capture lands on a different
+    fingerprint than the issue it belongs to."""
+    inner = {"error": {"message": "Unknown parameter: 'max_tokens'.",
+                       "type": "invalid_request_error", "param": "max_tokens",
+                       "code": "unknown_parameter"}}
+    wrapped = json.dumps({"error": json.dumps(inner)})
+    assert error_body("tool rejected", wrapped) == {
+        "error": {"message": "Unknown parameter: 'max_tokens'.",
+                  "type": "invalid_request_error", "param": "max_tokens",
+                  "code": "unknown_parameter"}}
 
 
 def test_a_validator_rejection_reaches_the_api_in_its_own_shape():
@@ -277,23 +376,14 @@ def test_a_local_tool_failure_never_reaches_the_api():
                                           error_message="exit 1")
         assert out is None
         assert stub.heals == []
-
-        healed = cb["transform_tool_result"](tool_name="list_issues", args={"sort": "x"},
-                                             result='{"error": "invalid sort"}', status="error",
-                                             error_message="invalid sort")
-        assert healed is not None
-        assert len(stub.heals) == 1
     finally:
         stub.stop()
 
 
-def test_registry_lookup_without_hermes_places_nothing():
-    """Outside Hermes the registry import fails; the filter then heals nothing."""
+def test_host_map_overrides_the_config_host(monkeypatch):
     plugin = load_plugin()
-    assert plugin._tool_entry("anything") is None
-    assert plugin.external_tool_filter()("anything") is None
-
-
-def test_an_unreadable_configuration_falls_back_to_the_mcp_scheme():
-    plugin = load_plugin()
-    assert plugin._mcp_server_host("never-configured") is None
+    monkeypatch.setenv("MNFST_HOST_MAP", " trace-echo = api.openai.com , other = h2.example ")
+    monkeypatch.setattr(plugin, "_HOSTS", {})
+    assert plugin._mcp_server_host("trace-echo") == "api.openai.com"
+    assert plugin._mcp_server_host("other") == "h2.example"
+    assert plugin._mcp_server_host("unmapped") is None  # falls through to config lookup
