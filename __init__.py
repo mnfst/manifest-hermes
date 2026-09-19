@@ -2,9 +2,10 @@
 
 A failed MCP tool call is sent to the Manifest heal API. When corrected
 arguments come back, the plugin re-invokes the tool itself with the patched
-arguments and returns the healed result to the model. The agent never sees
-Manifest, a retry instruction, or the repair — only the tool's response,
-healed or not. One heal and one internal retry per failure, fail-open.
+arguments, through Hermes' own call path so every hook and guard runs again,
+and returns the healed result to the model. The agent never sees Manifest, a
+retry instruction, or the repair — only the tool's response, healed or not.
+One heal and one internal retry per failure, fail-open.
 
 Only MCP tools are repaired, from any MCP server, plus any name prefix
 listed in MNFST_TOOLS. Built-in tools are never touched.
@@ -16,8 +17,9 @@ headers mark the row for backend segmentation.
 
 Environment: MNFST_KEY (required), MNFST_URL (optional),
 MNFST_HEAL_TIMEOUT seconds (default 20), MNFST_TOOLS (comma-separated name
-prefixes to treat as external), MNFST_HEAL_LOG (default 1: append heal
-attempts/outcomes to HERMES_TRACE_DIR for measurement). If the optional
+prefixes to treat as external), MNFST_HOST_MAP (`server=host,...` capture-host
+overrides), MNFST_HEAL_LOG (default 1: append heal attempts/outcomes to
+HERMES_TRACE_DIR for measurement, credentials withheld). If the optional
 `mnfst` package is installed, HTTP calls made inside the Hermes process are
 healed at the transport level as well; MNFST_HEAL_HTTP=0 skips that.
 """
@@ -26,14 +28,22 @@ from __future__ import annotations
 import json
 import logging
 import os
+from contextvars import ContextVar
 from typing import Any, Callable, Dict, Optional
+from urllib.parse import urlsplit
 
 try:  # loaded as a package by Hermes
-    from .manifest_heal import DEFAULT_URL, HealClient, Healer, healed_args
+    from .manifest_heal import (DEFAULT_URL, NOT_ATTEMPTED, HealClient, Healer, error_body,
+                                healed_args)
 except ImportError:  # loaded flat, plugin directory on sys.path
-    from manifest_heal import DEFAULT_URL, HealClient, Healer, healed_args  # type: ignore
+    from manifest_heal import (DEFAULT_URL, NOT_ATTEMPTED, HealClient, Healer,  # type: ignore
+                               error_body, healed_args)
 
 logger = logging.getLogger(__name__)
+
+# The identity fields Hermes threads through every tool hook; the internal
+# retry carries the same ones so it is observed as part of the same call.
+_CALL_IDS = ("task_id", "session_id", "tool_call_id", "turn_id", "api_request_id")
 
 
 def _tool_entry(tool_name: str):
@@ -46,22 +56,32 @@ def _tool_entry(tool_name: str):
 
 
 _HOSTS: Dict[str, Optional[str]] = {}
+_HOST_MAP: Optional[Dict[str, str]] = None
+
+
+def _netloc(value: str) -> Optional[str]:
+    """The bare host of a URL or a host string: no scheme, path, userinfo or case."""
+    url = value if "://" in value else "//" + value
+    return urlsplit(url).netloc.split("@")[-1].lower() or None
 
 
 def _host_map() -> Dict[str, str]:
     """Optional `MNFST_HOST_MAP=server=host,...` overrides for capture URLs.
 
     Useful when a stdio MCP server fronts a known API host (tests, gateways):
-    the map wins over the config-derived URL host.
+    the map wins over the config-derived URL host. Parsed once, like the
+    config: the environment cannot change without a restart.
     """
-    raw = os.environ.get("MNFST_HOST_MAP", "")
-    out: Dict[str, str] = {}
-    for pair in raw.split(","):
-        if "=" in pair:
+    global _HOST_MAP
+    if _HOST_MAP is None:
+        out: Dict[str, str] = {}
+        for pair in os.environ.get("MNFST_HOST_MAP", "").split(","):
             key, _, value = pair.partition("=")
-            if key.strip() and value.strip():
-                out[key.strip()] = value.strip()
-    return out
+            host = _netloc(value.strip()) if value.strip() else None
+            if key.strip() and host:
+                out[key.strip()] = host
+        _HOST_MAP = out
+    return _HOST_MAP
 
 
 def _mcp_server_host(server: str) -> Optional[str]:
@@ -77,12 +97,11 @@ def _mcp_server_host(server: str) -> Optional[str]:
         return _HOSTS[server]
     host = None
     try:
-        from urllib.parse import urlsplit
         from hermes_cli.config import load_config_readonly
         entry = ((load_config_readonly() or {}).get("mcp_servers") or {}).get(server)
         url = entry.get("url") if isinstance(entry, dict) else None
         if isinstance(url, str) and url:
-            host = urlsplit(url).netloc.split("@")[-1].lower() or None
+            host = _netloc(url)
     except Exception:
         host = None
     _HOSTS[server] = host
@@ -146,30 +165,60 @@ def _error_text(result: Any) -> str:
     return "tool error"
 
 
-def _registry_dispatch():
-    def dispatch(name: str, args: dict):
-        from tools.registry import registry  # Hermes' own tool registry
-        return registry.dispatch(name, args)
+def _hermes_dispatch() -> Callable[[str, dict, dict], Any]:
+    """Re-invoke a tool the way Hermes invokes it for the model.
+
+    `handle_function_call` runs the `pre_tool_call` policy hooks, edit approval,
+    the tool-execution middleware and the `post_tool_call` observers, so
+    server-dictated arguments get every check the original call got and other
+    plugins see the retry. The call's identity fields ride along so it is
+    observed as part of the same call. The request middleware is skipped: the
+    arguments in hand are already its output. An older Hermes without that
+    entry point falls back to the bare registry.
+    """
+    def dispatch(name: str, args: dict, ids: dict):
+        try:
+            from model_tools import handle_function_call
+        except ImportError:
+            from tools.registry import registry  # Hermes' own tool registry
+            return registry.dispatch(name, args)
+        return handle_function_call(name, args, skip_tool_request_middleware=True,
+                                    **{k: v for k, v in ids.items() if k in _CALL_IDS and v})
     return dispatch
+
+
+# The retry re-enters transform_tool_result (it is a real Hermes call). While
+# one is running on this call, the nested hook must not heal the retry's own
+# failure: one heal and one retry per failure.
+_RETRYING: ContextVar[bool] = ContextVar("mnfst_retrying", default=False)
 
 
 def build_callbacks(healer: Healer,
                     service_of: Optional[Callable[[str], Optional[str]]] = None,
                     host_of: Callable[[str], Optional[str]] = _mcp_server_host,
-                    dispatch: Optional[Callable[[str, dict], Any]] = None,
+                    dispatch: Optional[Callable[[str, dict, dict], Any]] = None,
                     ) -> Dict[str, Callable[..., Any]]:
     """The transform_tool_result callback: capture, heal, re-invoke, report.
 
-    `dispatch` is the re-invocation seam (Hermes' registry by default); tests
-    inject a fake here.
+    `dispatch(tool_name, args, call_ids)` is the re-invocation seam (Hermes'
+    own call path by default); tests inject a fake here.
     """
     service_of = service_of or external_tool_filter()
-    dispatch = dispatch or _registry_dispatch()
+    dispatch = dispatch or _hermes_dispatch()
+
+    def retry(tool_name: str, args: dict, ids: dict) -> Any:
+        token = _RETRYING.set(True)
+        try:
+            return dispatch(tool_name, args, ids)
+        finally:
+            _RETRYING.reset(token)
 
     def on_result(tool_name: str = "", args: Any = None, result: Any = None,
                   status: Optional[str] = None, error_message: Optional[str] = None,
-                  **_: Any) -> Optional[str]:
+                  **ids: Any) -> Optional[str]:
         try:
+            if _RETRYING.get():
+                return None
             if status != "error" or not isinstance(result, str) or not isinstance(args, dict):
                 return None
             server = service_of(tool_name)
@@ -179,27 +228,24 @@ def build_callbacks(healer: Healer,
                                     server=server, host=host_of(server))
             if patch is None:
                 return None
-            pending = healer.take(tool_name, args)
-            if pending is None:
-                return None
-            merged = healed_args(args, patch)
+            merged = healed_args(args, patch.body)
             if merged == args or not merged:
-                # Nothing changed, or nothing is left to send: either way the patch
-                # cannot fix anything, so report it and pass the error through.
-                healer.outcome(tool_name, pending.args, "error", error_message or "tool error")
+                # Nothing changed, or nothing is left to send: the patch was never
+                # exercised, and a report must not claim otherwise.
+                healer.not_attempted(patch, NOT_ATTEMPTED)
                 return None
             try:
-                healed = dispatch(tool_name, merged)
+                healed = retry(tool_name, merged, ids)
             except Exception as exc:
-                healer.outcome(tool_name, pending.args, "error", f"{type(exc).__name__}: {exc}")
+                healer.not_attempted(patch, f"{type(exc).__name__}: {exc}")
                 logger.debug("manifest internal retry raised: %s", exc)
                 return None
-            failed = _looks_failed(healed)
-            healer.outcome(tool_name, pending.args,
-                           "error" if failed else "ok",
-                           _error_text(healed) if failed else None)
-            if failed:
+            if _looks_failed(healed):
+                # The rejection travels in the same shape as the capture, so the
+                # backend can tell a recurrence from a different error.
+                healer.outcome(patch, False, error_body(_error_text(healed), healed))
                 return None  # the original error result stands
+            healer.outcome(patch, True)
             return healed if isinstance(healed, str) else json.dumps(healed)
         except Exception as exc:
             logger.debug("manifest transform_tool_result failed open: %s", exc)
@@ -216,7 +262,8 @@ def register(ctx) -> None:
     url = os.environ.get("MNFST_URL", "").strip() or DEFAULT_URL
     timeout = float(os.environ.get("MNFST_HEAL_TIMEOUT", "20"))
     healer = Healer(HealClient(config_key, url, timeout=timeout), timeout=timeout)
-    callbacks = build_callbacks(healer)
+    extra = tuple(p.strip() for p in os.environ.get("MNFST_TOOLS", "").split(",") if p.strip())
+    callbacks = build_callbacks(healer, external_tool_filter(extra))
     ctx.register_hook("transform_tool_result", callbacks["transform_tool_result"])
     logger.info("manifest plugin: tool-call repair registered")
     if os.environ.get("MNFST_HEAL_HTTP", "1") != "0":

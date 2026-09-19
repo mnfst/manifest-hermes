@@ -1,7 +1,7 @@
 """Repair a rejected tool call through the Manifest heal API. Standard library only.
 
-A failure comes in as (tool_name, args, error_message); a patch goes into a
-pending cache; the runtime's pre-call seam asks for it on the retry. One heal
+A failure comes in as (tool_name, args, error_message); the served patch comes
+back as a `Patch` the caller retries with at once and then reports on. One heal
 and one retry per failure; everything fails open.
 
 The heal client mirrors the mnfst SDK's contract: bearer project key,
@@ -22,7 +22,7 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Mapping, Optional
+from typing import Any, Callable, Optional
 
 VERSION = "0.2.0"
 DEFAULT_URL = "https://api.manifest.build"
@@ -102,6 +102,10 @@ def _unwrap_error(value: Any, depth: int = 4) -> Optional[dict]:
     if isinstance(message, str) and message:
         encoded = _unwrap_error(message, depth - 1)
         return encoded if encoded is not None else value
+    # No message, but code/type/param are identity inputs on their own: an
+    # error object that names them is still the object to send.
+    if any(value.get(key) for key in ("code", "type", "param")):
+        return value
     return None
 
 
@@ -246,14 +250,11 @@ class HealClient:
 
 # --- the loop -----------------------------------------------------------------
 
-def key_of(tool_name: str, args: Any) -> str:
-    return tool_name + "\x00" + json.dumps(args, sort_keys=True, default=str)
-
-
 # --- local measurement sink (plugin-side only; no prompt/runtime changes) -----
 # Every heal attempt, verdict, and retry outcome appends one JSON line to
 # HERMES_TRACE_DIR (default ~/.hermes/logs/hermes-trace). That stream is what
-# measures potential: attempts -> patches -> retries succeeded.
+# measures potential: attempts -> patches -> retries succeeded. Arguments are
+# logged as they travel: credential-named fields withheld, like the capture.
 
 def _trace_sink() -> Optional[str]:
     if os.environ.get("MNFST_HEAL_LOG", "1").strip().lower() in {"0", "false", "no", "off"}:
@@ -269,6 +270,7 @@ def _trace_emit(event: str, data: dict) -> None:
             return
         record = {"ts": time.time(), "event": event, "source": "manifest-plugin"}
         record.update(data)
+        Path(path).mkdir(parents=True, exist_ok=True)
         with open(Path(path) / "events.jsonl", "a", encoding="utf-8") as handle:
             handle.write(json.dumps(record, default=str, ensure_ascii=False) + "\n")
     except Exception:
@@ -276,103 +278,72 @@ def _trace_emit(event: str, data: dict) -> None:
 
 
 @dataclass
-class Pending:
+class Patch:
+    """A served patch: the healed body and the attempt it will be reported on."""
     tool_name: str
-    args: dict            # the patched arguments
+    body: dict
     attempt_id: Optional[str]
-    deadline: float
 
 
 class Healer:
-    def __init__(self, api: HealClient, timeout: float = 20.0, ttl: float = 600.0,
-                 clock: Callable[[], float] = time.monotonic) -> None:
+    def __init__(self, api: HealClient, timeout: float = 20.0) -> None:
         self.api = api
         self.timeout = timeout
-        self.ttl = ttl
-        self.clock = clock
-        self._pending: dict[str, Pending] = {}
-        self._burned: dict[str, float] = {}     # key of patched args -> deadline
-        self._applied: dict[str, Pending] = {}  # key of patched args -> pending, for outcome
-        self._lock = threading.Lock()
         self._pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="mnfst-heal")
 
     def on_error(self, tool_name: str, args: dict, error_message: str,
                  raw_result: Any = None, server: str = "mcp",
-                 host: Optional[str] = None) -> Optional[dict]:
-        with self._lock:
-            if key_of(tool_name, args) in self._burned:
-                return None
+                 host: Optional[str] = None) -> Optional[Patch]:
+        """Send the failure; the served patch, or None when there is nothing to retry."""
+        attempt = {"tool": tool_name, "server": server, "args": traveling_body(args),
+                   "error": error_message}
         try:
             payload = heal_payload(trace_id=uuid.uuid4().hex, tool_name=tool_name, server=server,
                                    args=args, error_message=error_message, host=host,
                                    raw_result=raw_result)
             result = self._pool.submit(self.api.heal, payload).result(timeout=self.timeout)
         except FutureTimeout:
-            _trace_emit("heal_attempt", {"tool": tool_name, "server": server, "args": args,
-                                         "error": error_message, "verdict": "timeout"})
+            _trace_emit("heal_attempt", {**attempt, "verdict": "timeout"})
             return None
         except Exception:
-            _trace_emit("heal_attempt", {"tool": tool_name, "server": server, "args": args,
-                                         "error": error_message, "verdict": "transport_error"})
+            _trace_emit("heal_attempt", {**attempt, "verdict": "transport_error"})
             return None
         if not isinstance(result, dict) or result.get("status") not in ("patched", "unverified"):
             verdict = result.get("status") if isinstance(result, dict) else "unusable_response"
-            _trace_emit("heal_attempt", {"tool": tool_name, "server": server, "args": args,
-                                         "error": error_message, "verdict": verdict})
+            _trace_emit("heal_attempt", {**attempt, "verdict": verdict})
             return None
         healed = result.get("healedRequest")
         body = healed.get("body") if isinstance(healed, dict) else None
         if not isinstance(body, dict):
-            _trace_emit("heal_attempt", {"tool": tool_name, "server": server, "args": args,
-                                         "error": error_message, "verdict": "patch_missing_body"})
+            _trace_emit("heal_attempt", {**attempt, "verdict": "patch_missing_body"})
             return None
-        _trace_emit("heal_attempt", {"tool": tool_name, "server": server, "args": args,
-                                     "error": error_message, "verdict": result.get("status"),
-                                     "patch": body, "attempt_id": result.get("healAttemptId")})
-        with self._lock:
-            self._pending[key_of(tool_name, args)] = Pending(
-                tool_name, body, result.get("healAttemptId"), self.clock() + self.ttl)
-        return body
+        _trace_emit("heal_attempt", {**attempt, "verdict": result.get("status"), "patch": body,
+                                     "attempt_id": result.get("healAttemptId")})
+        return Patch(tool_name, body, result.get("healAttemptId"))
 
-    def take(self, tool_name: str, args: dict) -> Optional[Pending]:
-        self.expire()
-        with self._lock:
-            pending = self._pending.pop(key_of(tool_name, args), None)
-            if pending is None:
-                return None
-            patched_key = key_of(tool_name, pending.args)
-            self._burned[patched_key] = self.clock() + self.ttl
-            self._applied[patched_key] = pending
-        return pending
-
-    def outcome(self, tool_name: str, args: dict, status: Optional[str],
-                error_message: Optional[str]) -> None:
-        with self._lock:
-            pending = self._applied.pop(key_of(tool_name, args), None)
-        if pending is None:
-            return
-        if status == "ok":
-            _trace_emit("heal_outcome", {"tool": tool_name, "attempt_id": pending.attempt_id,
-                                         "patched_args": pending.args,
+    def outcome(self, patch: Patch, ok: bool, error: Any = None) -> None:
+        """The retry ran: report what the tool answered with the patched arguments."""
+        if ok:
+            _trace_emit("heal_outcome", {"tool": patch.tool_name, "attempt_id": patch.attempt_id,
+                                         "patched_args": traveling_body(patch.body),
                                          "retry_result": "success", "status_code": 200})
-            self._report(pending.attempt_id, 200)
-        else:
-            _trace_emit("heal_outcome", {"tool": tool_name, "attempt_id": pending.attempt_id,
-                                         "patched_args": pending.args,
-                                         "retry_result": "failed",
-                                         "error": error_message or "tool error", "status_code": 422})
-            self._report(pending.attempt_id, 422, {"error": error_message or "tool error"})
+            self._report(patch.attempt_id, 200)
+            return
+        _trace_emit("heal_outcome", {"tool": patch.tool_name, "attempt_id": patch.attempt_id,
+                                     "patched_args": traveling_body(patch.body),
+                                     "retry_result": "failed", "error": error, "status_code": 422})
+        self._report(patch.attempt_id, 422, error)
 
-    def expire(self) -> None:
-        now = self.clock()
-        with self._lock:
-            dropped = [k for k, p in self._pending.items() if p.deadline <= now]
-            reports = [self._pending.pop(k) for k in dropped]
-            for k in [k for k, d in self._burned.items() if d <= now]:
-                self._burned.pop(k, None)
-                self._applied.pop(k, None)
-        for pending in reports:
-            self._report(pending.attempt_id, 0, NOT_ATTEMPTED)
+    def not_attempted(self, patch: Patch, reason: str = NOT_ATTEMPTED) -> None:
+        """The retry never reached the tool: no evidence about the patch either way.
+
+        `NOT_ATTEMPTED` says the patch changed nothing; any other reason is the
+        transport error that kept the retry from running.
+        """
+        _trace_emit("heal_outcome", {"tool": patch.tool_name, "attempt_id": patch.attempt_id,
+                                     "patched_args": traveling_body(patch.body),
+                                     "retry_result": "not_attempted", "reason": reason})
+        self._report(patch.attempt_id, 0, reason)
 
     def _report(self, attempt_id: Optional[str], status_code: int, error: Any = None) -> None:
         if not attempt_id:
