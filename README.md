@@ -9,6 +9,18 @@ hermes plugins enable manifest
 
 Set `MNFST_KEY` (your Manifest project key, with Autofix on) when prompted or in the Hermes env file, then restart Hermes. No other dependency.
 
+## Updating
+
+```sh
+hermes plugins update manifest
+```
+
+That pulls the latest commit into `~/.hermes/plugins/manifest`. Restart Hermes afterwards so the new code loads. If the install is pinned to a commit or is not a git checkout (a copied directory), Hermes refuses to pull; reinstall instead:
+
+```sh
+hermes plugins install mnfst/manifest-hermes --force
+```
+
 ## What it repairs
 
 MCP tools only, from any MCP server. Hermes registers them under an `mcp-<server>` toolset.
