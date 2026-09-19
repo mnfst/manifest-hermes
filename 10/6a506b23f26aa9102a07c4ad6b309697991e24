@@ -1,9 +1,12 @@
 __init__.py
   s_fd9f854db2d37a::t_062d16e85479f2 31,33,184-187
+  s_fd9f854db2d37a::t_f2cf90eedab02e 31,33,184-187
 manifest_heal.py
   s_fd9f854db2d37a::t_0319fa5cd81988 64-77
+  s_fd9f854db2d37a::t_b54f8e01edbaa2 64-77
 tests/test_end_to_end.py
   s_fd9f854db2d37a::t_00e709ec7a0578 132-151
+  s_fd9f854db2d37a::t_297e9c0385b1a8 132-151
 ---
 {
   "schema_version": "authorship/3.0.0",
