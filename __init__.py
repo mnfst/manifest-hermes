@@ -9,9 +9,10 @@ healed or not. One heal and one internal retry per failure, fail-open.
 Only MCP tools are repaired, from any MCP server, plus any name prefix
 listed in MNFST_TOOLS. Built-in tools are never touched.
 
-Captures carry statusCode 424 (Failed Dependency): the transport succeeded but
-the tool execution it depended on failed. The `x-manifest-tool-call: mcp` and
-`x-manifest-mcp-server` headers mark the row for backend segmentation.
+Captures carry statusCode 418, the sentinel for a tool call: 418 is permanently
+reserved (RFC 2324 / RFC 9110), so no real API failure can collide with the
+synthetic envelope. The `x-manifest-tool-call: mcp` and `x-manifest-mcp-server`
+headers mark the row for backend segmentation.
 
 Environment: MNFST_KEY (required), MNFST_URL (optional),
 MNFST_HEAL_TIMEOUT seconds (default 20), MNFST_TOOLS (comma-separated name

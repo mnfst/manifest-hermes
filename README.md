@@ -26,9 +26,10 @@ a retry instruction, or the repair — it only ever sees the tool's response,
 healed or not. One heal and one internal retry per failure; anything unexpected
 passes the original result through.
 
-Captures carry `statusCode: 424` (Failed Dependency — the transport succeeded but
-the tool execution it depended on failed) plus the `x-manifest-tool-call: mcp` and
-`x-manifest-mcp-server` headers, so the backend can segment tool calls from plain
+Captures carry `statusCode: 418` — the sentinel for a tool call rather than a
+wire status. 418 is permanently reserved (RFC 2324 / RFC 9110), so no real API
+failure can collide with the synthetic envelope. The `x-manifest-tool-call: mcp`
+and `x-manifest-mcp-server` headers let the backend segment tool calls from plain
 HTTP traffic. No Hermes middleware is used, so the plugin runs on any Hermes version.
 
 ## Measuring
