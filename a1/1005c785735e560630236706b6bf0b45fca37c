@@ -1,0 +1,21 @@
+README.md
+  s_4da576b0972d15::t_bab97d89287c00 42-46
+__init__.py
+  s_4da576b0972d15::t_fbcf769d458fda 171-178
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "a11005c785735e560630236706b6bf0b45fca37c",
+  "prompts": {},
+  "sessions": {
+    "s_4da576b0972d15": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "004378bd-f430-472d-aa07-de7b1a891ec3",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "Guillaume Gay <guillaume.gay@protonmail.com>"
+    }
+  }
+}
