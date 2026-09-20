@@ -168,13 +168,14 @@ def _error_text(result: Any) -> str:
 def _hermes_dispatch() -> Callable[[str, dict, dict], Any]:
     """Re-invoke a tool the way Hermes invokes it for the model.
 
-    `handle_function_call` runs the `pre_tool_call` policy hooks, edit approval,
-    the tool-execution middleware and the `post_tool_call` observers, so
-    server-dictated arguments get every check the original call got and other
-    plugins see the retry. The call's identity fields ride along so it is
-    observed as part of the same call. The request middleware is skipped: the
-    arguments in hand are already its output. An older Hermes without that
-    entry point falls back to the bare registry.
+    `handle_function_call` runs the `pre_tool_call` policy hooks, edit approval
+    and the tool-execution middleware, so server-dictated arguments get every
+    check the original call got and a policy plugin sees the retry. The call's
+    identity fields ride along so it is observed as part of the same call; the
+    agent loop owns `post_tool_call` and fires it once, with the final result.
+    The request middleware is skipped: the arguments in hand are already its
+    output. An older Hermes without that entry point falls back to the bare
+    registry.
     """
     def dispatch(name: str, args: dict, ids: dict):
         try:

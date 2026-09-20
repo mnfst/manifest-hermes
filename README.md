@@ -39,10 +39,11 @@ healed or not. One heal and one internal retry per failure; anything unexpected
 passes the original result through.
 
 The retry is a real Hermes tool call (`handle_function_call`), not a bare registry
-dispatch: it runs through the `pre_tool_call` policy hooks, edit approval, the
-tool-execution middleware and the `post_tool_call` observers with the original
-call's identity, so server-dictated arguments get every check the first call got
-and other plugins see the retry. A patch that changes nothing, or a retry that
+dispatch: it runs through the `pre_tool_call` policy hooks, edit approval and the
+tool-execution middleware with the original call's identity, so server-dictated
+arguments get every check the first call got and a policy plugin sees the retry.
+The agent loop owns `post_tool_call` and fires it once per model-facing call,
+with the final (healed) result. A patch that changes nothing, or a retry that
 never reaches the tool, is reported as *not attempted* rather than as a failure.
 
 Captures carry `statusCode: 418` — the sentinel for a tool call rather than a
