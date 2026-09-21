@@ -5,34 +5,22 @@ Configuration, limits and development for the Manifest Hermes plugin. The
 
 ## Configuration
 
-Only `MNFST_KEY` is required. Everything below has a working default.
+Two variables, both read once at registration. The environment cannot change
+without a restart.
 
 | Variable | What it does |
 | --- | --- |
 | `MNFST_KEY` | Your Manifest project key. Required; without it the plugin registers nothing. |
-| `MNFST_URL` | Point at another Manifest endpoint. |
-| `MNFST_HEAL_TIMEOUT` | Seconds to wait for a patch. Default `20`. |
-| `MNFST_TOOLS` | Comma-separated name prefixes to treat as external. See below. |
-| `MNFST_HOST_MAP` | `server=host,...` overrides for the capture host when a stdio server fronts a known API. A URL is reduced to its host. |
-| `MNFST_HEAL_HTTP` | Set to `0` to skip transport-level healing of HTTP calls made inside the Hermes process. |
-| `MNFST_HEAL_LOG` | Measurement sink. Default on. |
-| `MNFST_HEAL_DEBUG` | Set to `1` to log the raw heal request and response to the trace file. |
+| `MNFST_URL` | Point at another Manifest endpoint. Optional. |
 
-All of them are read once, at registration. The environment cannot change
-without a restart.
+The heal request waits 20 seconds for a patch, then the original result stands.
 
-### Healing a tool that is not MCP
+### What gets repaired
 
 A tool is repaired when Hermes registered it under an `mcp-<server>` toolset.
 Everything else counts as local, including a built-in tool that reaches an API,
-so an unreadable registry heals nothing rather than everything.
-
-`MNFST_TOOLS` is the opt-in for a tool outside that rule, and the prefix you
-list names the service in Manifest:
-
-```sh
-export MNFST_TOOLS='stripe_,shopify_'
-```
+so an unreadable registry heals nothing rather than everything. There is no
+opt-in for other tools: a local tool's arguments are never sent anywhere.
 
 ## Where a capture lands
 
@@ -67,8 +55,7 @@ No Hermes middleware is used, so the plugin runs on any Hermes version.
 
 ## Measuring
 
-With `MNFST_HEAL_LOG=1` (the default), every heal attempt and retry outcome
-appends one JSON line to `$HERMES_TRACE_DIR/events.jsonl` (default
+Every heal attempt and retry outcome appends one JSON line to `$HERMES_TRACE_DIR/events.jsonl` (default
 `~/.hermes/logs/hermes-trace/`):
 
 ```

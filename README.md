@@ -54,9 +54,7 @@ export MNFST_KEY='your-project-key'
 
 3. Restart Hermes so the plugin loads.
 
-That is the whole setup. `MNFST_URL` points the plugin at another Manifest endpoint if you need one. Self-healing is enabled by default in your project settings.
-
-Everything else has a working default. The [guide](docs/guide.md) lists the rest.
+That is the whole setup. `MNFST_URL` points the plugin at another Manifest endpoint if you need one. There is no other configuration. Self-healing is enabled by default in your project settings.
 
 ## Try it
 
@@ -78,10 +76,8 @@ The agent only ever sees the healed result. Check your [Manifest dashboard](http
 | The agent calls… | Covered |
 | --- | --- |
 | An MCP tool, from any MCP server | ✅ healed |
-| A tool named in `MNFST_TOOLS` | ✅ healed |
 | A built-in tool, including API-backed ones such as `web_search` | ❌ never repaired |
 | A local tool (terminal, file, memory) | ❌ never sent anywhere |
-| An HTTP call made by a tool inside the Hermes process | ✅ healed when the `mnfst` package is installed |
 
 Hermes registers MCP tools under an `mcp-<server>` toolset. A tool the registry cannot place counts as local, so an unreadable registry heals nothing rather than everything.
 

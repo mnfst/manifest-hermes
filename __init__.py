@@ -7,21 +7,17 @@ and returns the healed result to the model. The agent never sees Manifest, a
 retry instruction, or the repair — only the tool's response, healed or not.
 One heal and one internal retry per failure, fail-open.
 
-Only MCP tools are repaired, from any MCP server, plus any name prefix
-listed in MNFST_TOOLS. Built-in tools are never touched.
+Only MCP tools are repaired, from any MCP server. Built-in and local tools
+are never touched.
 
 Captures carry statusCode 418, the sentinel for a tool call: 418 is permanently
 reserved (RFC 2324 / RFC 9110), so no real API failure can collide with the
 synthetic envelope. The `x-manifest-tool-call: mcp` and `x-manifest-mcp-server`
 headers mark the row for backend segmentation.
 
-Environment: MNFST_KEY (required), MNFST_URL (optional),
-MNFST_HEAL_TIMEOUT seconds (default 20), MNFST_TOOLS (comma-separated name
-prefixes to treat as external), MNFST_HOST_MAP (`server=host,...` capture-host
-overrides), MNFST_HEAL_LOG (default 1: append heal attempts/outcomes to
-HERMES_TRACE_DIR for measurement, credentials withheld). If the optional
-`mnfst` package is installed, HTTP calls made inside the Hermes process are
-healed at the transport level as well; MNFST_HEAL_HTTP=0 skips that.
+Environment: MNFST_KEY (required) and MNFST_URL (optional). Every heal
+attempt and outcome is appended to HERMES_TRACE_DIR for measurement,
+credentials withheld.
 """
 from __future__ import annotations
 
@@ -56,7 +52,6 @@ def _tool_entry(tool_name: str):
 
 
 _HOSTS: Dict[str, Optional[str]] = {}
-_HOST_MAP: Optional[Dict[str, str]] = None
 
 
 def _netloc(value: str) -> Optional[str]:
@@ -65,34 +60,12 @@ def _netloc(value: str) -> Optional[str]:
     return urlsplit(url).netloc.split("@")[-1].lower() or None
 
 
-def _host_map() -> Dict[str, str]:
-    """Optional `MNFST_HOST_MAP=server=host,...` overrides for capture URLs.
-
-    Useful when a stdio MCP server fronts a known API host (tests, gateways):
-    the map wins over the config-derived URL host. Parsed once, like the
-    config: the environment cannot change without a restart.
-    """
-    global _HOST_MAP
-    if _HOST_MAP is None:
-        out: Dict[str, str] = {}
-        for pair in os.environ.get("MNFST_HOST_MAP", "").split(","):
-            key, _, value = pair.partition("=")
-            host = _netloc(value.strip()) if value.strip() else None
-            if key.strip() and host:
-                out[key.strip()] = host
-        _HOST_MAP = out
-    return _HOST_MAP
-
-
 def _mcp_server_host(server: str) -> Optional[str]:
     """The host of a configured MCP server, from Hermes' own configuration.
 
     Cached: the lookup parses the config file, and the answer cannot change
-    without a restart. `MNFST_HOST_MAP` overrides per server.
+    without a restart.
     """
-    override = _host_map().get(server)
-    if override:
-        return override
     if server in _HOSTS:
         return _HOSTS[server]
     host = None
@@ -108,7 +81,7 @@ def _mcp_server_host(server: str) -> Optional[str]:
     return host
 
 
-def external_tool_filter(extra: tuple = (), entry_of: Callable[[str], Any] = _tool_entry):
+def external_tool_filter(entry_of: Callable[[str], Any] = _tool_entry):
     """The service a tool calls, or None when the tool is local.
 
     Manifest learns a contract from a service's own rejections. A local tool
@@ -119,17 +92,13 @@ def external_tool_filter(extra: tuple = (), entry_of: Callable[[str], Any] = _to
     registers every MCP server's tools, whatever the server. The server names
     the service. Everything else counts as local, including a built-in tool
     that reaches an API, so an unreadable registry heals nothing rather than
-    everything. MNFST_TOOLS is the explicit opt-in for a tool outside that
-    rule; the prefix names its service.
+    everything.
     """
     def service_of(tool_name: str) -> Optional[str]:
         entry = entry_of(tool_name)
         toolset = getattr(entry, "toolset", None) if entry is not None else None
         if toolset and toolset.startswith("mcp-"):
             return toolset[len("mcp-"):].strip("-_") or "mcp"
-        for prefix in extra:
-            if tool_name.startswith(prefix):
-                return prefix.strip("-_") or "tool"
         return None
 
     return service_of
@@ -261,18 +230,7 @@ def register(ctx) -> None:
         logger.warning("manifest plugin: MNFST_KEY is not set; nothing registered")
         return
     url = os.environ.get("MNFST_URL", "").strip() or DEFAULT_URL
-    timeout = float(os.environ.get("MNFST_HEAL_TIMEOUT", "20"))
-    healer = Healer(HealClient(config_key, url, timeout=timeout), timeout=timeout)
-    extra = tuple(p.strip() for p in os.environ.get("MNFST_TOOLS", "").split(",") if p.strip())
-    callbacks = build_callbacks(healer, external_tool_filter(extra))
+    healer = Healer(HealClient(config_key, url))
+    callbacks = build_callbacks(healer)
     ctx.register_hook("transform_tool_result", callbacks["transform_tool_result"])
     logger.info("manifest plugin: tool-call repair registered")
-    if os.environ.get("MNFST_HEAL_HTTP", "1") != "0":
-        try:
-            from mnfst import manifest  # optional: transport-level healing for in-process HTTP
-        except ImportError:
-            return
-        try:
-            manifest()
-        except Exception as exc:
-            logger.warning("manifest plugin: transport install skipped: %s", exc)
