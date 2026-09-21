@@ -1,0 +1,24 @@
+README.md
+  s_2e75ac39a5c1bf::t_63df46e5aaac2e 92
+  s_2e75ac39a5c1bf::t_bd54881ba94fc8 9
+  s_2e75ac39a5c1bf::t_e3490e75951ec4 48,72
+  s_2e75ac39a5c1bf::t_730dd858157545 26,34
+  s_2e75ac39a5c1bf::t_e95b7d127827e8 118
+  s_2e75ac39a5c1bf::t_20c8c5028e51ba 1,3-8,10-25,27-33,35-37,44,46-47,49,52,55-61,64,66-67,69-70,74,76-90,93-94,98-103,105,107,109-117,120-130,135-138
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "038b672796f08d982175ee78c1260dc6315c3cd7",
+  "prompts": {},
+  "sessions": {
+    "s_2e75ac39a5c1bf": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "480fe9e3-e388-41a1-a5a3-80bb17d5dd59",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Guillaume Gay <guillaume.gay@protonmail.com>"
+    }
+  }
+}
