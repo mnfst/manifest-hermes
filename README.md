@@ -45,7 +45,7 @@ No other dependency.
 
 ## Setup
 
-1. Create a project in your [Manifest dashboard](https://app-staging.manifest.build) and copy its project key.
+1. Create a project in your [Manifest dashboard](https://dashboard.manifest.build) and copy its project key.
 2. Set the key as an environment variable, when prompted or in the Hermes env file:
 
 ```sh
@@ -69,7 +69,7 @@ You: fetch my 5 most recent emails
 Agent: Here are your 5 most recent emails…
 ```
 
-The agent only ever sees the healed result. Check your [Manifest dashboard](https://app-staging.manifest.build) to see all repairs and insights.
+The agent only ever sees the healed result. Check your [Manifest dashboard](https://dashboard.manifest.build) to see all repairs and insights.
 
 ## What is covered
 
