@@ -1,5 +1,5 @@
 name: manifest
-version: 0.2.0
+version: 0.3.0
 manifest_version: 2
 api_version: 1
 license: MIT
@@ -13,5 +13,3 @@ requires_env:
     description: "Manifest project key (Project Settings, Autofix on)"
     url: "https://manifest.build"
     secret: true
-python_dependencies:
-  - "mnfst>=1,<2"

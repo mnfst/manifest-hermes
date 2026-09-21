@@ -216,8 +216,6 @@ class HealClient:
         if not self.enabled():
             return None
         status, body = self._call("POST", "/v1/heal", payload)
-        if os.environ.get("MNFST_HEAL_DEBUG", "").strip().lower() in {"1", "true", "yes", "on"}:
-            _trace_emit("heal_debug", {"http_status": status, "response": body, "payload": payload})
         if status == 403 and isinstance(body, dict) and body.get("error") == "project_disabled":
             self._disabled_until = self.clock() + DISABLE_SECONDS
             return None
@@ -256,9 +254,7 @@ class HealClient:
 # measures potential: attempts -> patches -> retries succeeded. Arguments are
 # logged as they travel: credential-named fields withheld, like the capture.
 
-def _trace_sink() -> Optional[str]:
-    if os.environ.get("MNFST_HEAL_LOG", "1").strip().lower() in {"0", "false", "no", "off"}:
-        return None
+def _trace_sink() -> str:
     return os.environ.get("HERMES_TRACE_DIR") or str(
         Path.home() / ".hermes" / "logs" / "hermes-trace")
 
@@ -266,8 +262,6 @@ def _trace_sink() -> Optional[str]:
 def _trace_emit(event: str, data: dict) -> None:
     try:
         path = _trace_sink()
-        if not path:
-            return
         record = {"ts": time.time(), "event": event, "source": "manifest-plugin"}
         record.update(data)
         Path(path).mkdir(parents=True, exist_ok=True)

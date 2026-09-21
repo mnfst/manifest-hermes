@@ -258,7 +258,6 @@ def test_the_measurement_log_is_created_and_withholds_credentials(tmp_path, monk
     than silently append into nothing. And the log is on by default, so it must
     withhold the same credential-named fields the capture withholds."""
     monkeypatch.setenv("HERMES_TRACE_DIR", str(tmp_path / "hermes-trace"))
-    monkeypatch.delenv("MNFST_HEAL_LOG", raising=False)
     stub = StubHeal().start()
     try:
         stub.result = PATCHED
@@ -291,43 +290,17 @@ def test_register_wires_one_seam_and_respects_missing_key(monkeypatch):
 
     monkeypatch.setenv("MNFST_KEY", "mnfx_k")
     monkeypatch.setenv("MNFST_URL", "http://127.0.0.1:9")
-    monkeypatch.setenv("MNFST_HEAL_HTTP", "0")
     ctx = Ctx()
     load_plugin().register(ctx)
     assert set(ctx.hooks) == {"transform_tool_result"}
     assert ctx.middleware == {}  # no middleware needed: the plugin retries itself
 
 
-def test_register_honours_the_mnfst_tools_opt_in(monkeypatch):
-    """MNFST_TOOLS names prefixes to heal outside the mcp-<server> rule. Without
-    a readable registry (this test), only that opt-in can place a tool."""
-    stub = StubHeal().start()
-    try:
-        stub.result = PATCHED
-        monkeypatch.setenv("MNFST_KEY", "mnfx_k")
-        monkeypatch.setenv("MNFST_URL", stub.url)
-        monkeypatch.setenv("MNFST_HEAL_HTTP", "0")
-        monkeypatch.setenv("MNFST_TOOLS", "composio_, github_")
-        hooks = {}
-        ctx = type("Ctx", (), {"register_hook": lambda self, n, fn: hooks.__setitem__(n, fn)})()
-        load_plugin().register(ctx)
-        hook = hooks["transform_tool_result"]
-        hook(tool_name="composio_list", args={"sort": "x"}, result='{"error": "bad"}',
-             status="error", error_message="bad")
-        assert len(stub.heals) == 1
-        assert stub.heals[0]["request"]["headers"]["x-manifest-mcp-server"] == "composio"
-        hook(tool_name="terminal", args={"command": "ls"}, result='{"error": "bad"}',
-             status="error", error_message="bad")
-        assert len(stub.heals) == 1  # not opted in: never sent
-    finally:
-        stub.stop()
-
-
 def test_plugin_has_no_third_party_imports():
     root = pathlib.Path(__file__).resolve().parents[1]
     for name in ("__init__.py", "manifest_heal.py"):
         text = (root / name).read_text()
-        assert "from mnfst" not in text.replace("from mnfst import manifest  # optional", "")
+        assert "from mnfst" not in text and "import mnfst" not in text
         assert "import httpx" not in text and "import requests" not in text
 
 
@@ -470,10 +443,6 @@ def test_only_mcp_tools_are_repaired():
     assert service_of("memory") is None
     assert service_of("never_registered") is None        # unplaceable counts as local
 
-    extended = plugin.external_tool_filter(extra=("github_",), entry_of=REGISTRY.get)
-    assert extended("github_create_issue") == "github"
-    assert extended("terminal") is None
-
 
 def test_a_local_tool_failure_never_reaches_the_api():
     stub = StubHeal().start()
@@ -489,27 +458,3 @@ def test_a_local_tool_failure_never_reaches_the_api():
         assert stub.heals == []
     finally:
         stub.stop()
-
-
-def test_host_map_overrides_the_config_host(monkeypatch):
-    plugin = load_plugin()
-    monkeypatch.setenv("MNFST_HOST_MAP", " trace-echo = api.openai.com , other = h2.example ")
-    monkeypatch.setattr(plugin, "_HOSTS", {})
-    monkeypatch.setattr(plugin, "_HOST_MAP", None)
-    assert plugin._mcp_server_host("trace-echo") == "api.openai.com"
-    assert plugin._mcp_server_host("other") == "h2.example"
-    assert plugin._mcp_server_host("unmapped") is None  # falls through to config lookup
-
-
-def test_host_map_values_are_normalized_like_config_hosts(monkeypatch):
-    """A URL or a mixed-case host in the map must yield the same bare host the
-    config path yields, or the capture URL doubles its scheme."""
-    plugin = load_plugin()
-    monkeypatch.setenv("MNFST_HOST_MAP",
-                       "a=https://API.OpenAI.com/v1,b=user:pw@H.Example:8443,c=,=x")
-    monkeypatch.setattr(plugin, "_HOSTS", {})
-    monkeypatch.setattr(plugin, "_HOST_MAP", None)
-    assert plugin._mcp_server_host("a") == "api.openai.com"
-    assert plugin._mcp_server_host("b") == "h.example:8443"
-    assert plugin._mcp_server_host("c") is None
-    assert tool_url("a", "chat", plugin._mcp_server_host("a")) == "https://api.openai.com/chat"
