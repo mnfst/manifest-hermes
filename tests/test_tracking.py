@@ -72,8 +72,9 @@ def test_a_tool_call_is_recorded_like_its_heal_capture():
     assert record["occurredAt"].endswith("+00:00")
 
 
-def test_a_stdio_server_is_recorded_under_the_mcp_scheme():
-    assert tracked_call("files", "read", None, 200, None)["url"] == "mcp://files/read"
+def test_a_stdio_server_is_not_tracked():
+    # A stdio server is a local process with no HTTP address: nothing to track.
+    assert tracked_call("files", "read", None, 200, 5) is None
 
 
 def test_an_unusable_record_is_never_built():

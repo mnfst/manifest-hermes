@@ -2,7 +2,7 @@
 
 Every MCP tool call the plugin does not send to POST /v1/heal is recorded as
 metadata and sent in batches to POST /v1/requests: the method, the tool's URL
-(the same one its heal capture would use), the status (200 when the call
+(the same one its heal capture would use; HTTP servers only), the status (200 when the call
 worked, the 418 tool-call sentinel when it failed and was not healed), the
 duration Hermes measured, and when it happened. Never the arguments or the
 result.
@@ -33,7 +33,13 @@ MAX_URL = 4096
 
 def tracked_call(server: str, tool_name: str, host: Optional[str], status_code: int,
                  duration_ms: Optional[int]) -> Optional[dict]:
-    """The wire record for one tool call, or None when the server would refuse it."""
+    """The wire record for one tool call, or None when it is not tracked.
+
+    Only tool calls on an MCP server reached over HTTP are tracked: a stdio
+    server is a local process with no address, and Colibri tracks HTTP services.
+    """
+    if not host:
+        return None
     url = tool_url(server, tool_name, host)
     if len(url) > MAX_URL or not 100 <= status_code <= 599:
         return None

@@ -39,12 +39,12 @@ plain HTTP traffic.
 
 ## Every tool call is tracked
 
-Every MCP tool call the plugin does not send to heal is also reported, as
-metadata only, to `POST /v1/requests`: the same URL a capture would use, the
+Every MCP tool call the plugin does not send to heal, on a server reached over
+HTTP, is also reported, as metadata only, to `POST /v1/requests`: the same URL a capture would use, the
 status (`200` when the tool call worked, `418` when it failed while healing was
 paused), the duration Hermes measured, and when it happened. Never the
-arguments or the result. Local tools are never reported, and neither is the
-plugin's own retry.
+arguments or the result. Local tools and stdio MCP servers (a local process,
+no HTTP address) are never reported, and neither is the plugin's own retry.
 
 Calls are kept in memory and sent from a background thread: when 500 are
 waiting or every five seconds, at most once per second, 500 per request.
