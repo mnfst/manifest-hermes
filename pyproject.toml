@@ -2,7 +2,7 @@
 # `hermes plugins install`, never with pip.
 [project]
 name = "manifest-hermes-dev"
-version = "0.1.0"
+version = "0.3.0"
 requires-python = ">=3.10"
 
 [project.optional-dependencies]
