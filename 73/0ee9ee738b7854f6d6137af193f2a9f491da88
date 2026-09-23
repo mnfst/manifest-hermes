@@ -1,0 +1,29 @@
+.github/workflows/release.yml
+  s_eb3d812ee7c509::t_345788ef98adc5 1-46
+.release-please-manifest.json
+  s_eb3d812ee7c509::t_df0499e1def88f 1-3
+manifest_heal.py
+  s_eb3d812ee7c509::t_5f598a65ed9836 27
+pyproject.toml
+  s_eb3d812ee7c509::t_cdf549778f307a 5
+release-please-config.json
+  s_eb3d812ee7c509::t_37a34579ee17be 1-17
+tests/test_version.py
+  s_eb3d812ee7c509::t_3e6acc1e8abca0 1-22
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "730ee9ee738b7854f6d6137af193f2a9f491da88",
+  "prompts": {},
+  "sessions": {
+    "s_eb3d812ee7c509": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "870ec716-ab0e-4fba-98d8-d89732a224f1",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Guillaume Gay <guillaume.gay@protonmail.com>"
+    }
+  }
+}
