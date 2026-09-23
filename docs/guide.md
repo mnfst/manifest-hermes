@@ -21,6 +21,10 @@ A tool is repaired when Hermes registered it under an `mcp-<server>` toolset.
 Everything else counts as local, including a built-in tool that reaches an API,
 so an unreadable registry heals nothing rather than everything. There is no
 opt-in for other tools: a local tool's arguments are never sent anywhere.
+A tool on a stdio MCP server is left alone too: the server is a local process
+with no HTTP address. Only servers configured with a `url` are repaired, which
+also means a server whose URL cannot be read from the Hermes configuration is
+left alone.
 
 ## Where a capture lands
 
@@ -28,14 +32,34 @@ A capture carries the MCP server's real host and the tool as the path, for
 example `https://backend.composio.dev/GMAIL_FETCH_EMAILS`, so the service in
 Manifest is the server that rejected the call and each tool is its own
 endpoint. The router's real path is not used: it carries a per-agent session
-id. When the host cannot be read from the Hermes configuration, the URL falls
-back to `mcp://<server>/<tool>`.
+id. A stdio server has no HTTP address, so its tools are neither repaired nor
+tracked.
 
 Captures carry `statusCode: 418`, the sentinel for a tool call rather than a
 wire status. 418 is permanently reserved (RFC 2324 / RFC 9110), so no real API
 failure can collide with the synthetic envelope. The `x-manifest-tool-call: mcp`
 and `x-manifest-mcp-server` headers let the backend segment tool calls from
 plain HTTP traffic.
+
+## Every tool call is tracked
+
+Every MCP tool call the plugin does not send to heal, on a server reached over
+HTTP, is also reported, as metadata only, to `POST /v1/requests`: the same URL a capture would use, the
+status (`200` when the tool call worked, `418` when it failed while healing was
+paused), the duration Hermes measured, and when it happened. Never the
+arguments or the result. Local tools and stdio MCP servers (a local process,
+no HTTP address) are never reported, and neither is the plugin's own retry.
+
+Calls are kept in memory and sent from a background thread: when 500 are
+waiting or every five seconds, at most once per second, 500 per request.
+Recording a call never delays the tool loop. At most 5,000 calls wait; newer
+ones are dropped past that. A send that fails with a network error, 429 or 5xx
+is retried once. Calls still waiting are sent when Hermes exits, for at most
+two seconds. A disabled project pauses sending like healing.
+
+This tracks tool calls, not the HTTP requests behind them: an MCP server
+usually answers HTTP 200 even when a tool fails (the error rides in the
+JSON-RPC body), so the tool's result is the signal.
 
 ## How the retry runs
 

@@ -1,4 +1,4 @@
-"""Stdlib stub of the Manifest heal contract: POST /v1/heal, PATCH /v1/heal-attempts/<id>."""
+"""Stdlib stub of the Manifest contract: POST /v1/heal, PATCH /v1/heal-attempts/<id>, POST /v1/requests."""
 from __future__ import annotations
 
 import json
@@ -13,6 +13,8 @@ class StubHeal:
         self.heals: list[dict] = []
         self.outcomes: list[tuple[str, dict]] = []
         self.disabled = False  # answer 403 project_disabled to heals
+        self.tracked: list[dict] = []
+        self.requests_status = 202
         self._server: Optional[ThreadingHTTPServer] = None
 
     @property
@@ -40,6 +42,11 @@ class StubHeal:
                 self.wfile.write(data)
 
             def do_POST(self):
+                if self.path == "/v1/requests":
+                    body = self._read()
+                    if stub.requests_status == 202:
+                        stub.tracked.extend(body.get("requests", []))
+                    return self._reply(stub.requests_status, {"accepted": len(body.get("requests", []))})
                 if self.path != "/v1/heal":
                     return self._reply(404, {"error": "not_found"})
                 stub.heals.append(self._read())

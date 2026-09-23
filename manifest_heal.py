@@ -136,21 +136,19 @@ def error_body(error_message: str, raw_result: Any = None) -> Any:
     return {"error": {"message": error_message}}
 
 
-def tool_url(server: str, tool_name: str, host: Optional[str] = None) -> str:
+def tool_url(server: str, tool_name: str, host: str) -> str:
     """The failing call's URL.
 
     Manifest reads the service from the host and the endpoint from the path, so
     the MCP server's own host names the service and each tool is its own
-    endpoint. The server's real host is used when it can be read from the Hermes
-    configuration; the `mcp` scheme is the fallback when it cannot.
+    endpoint. Only servers reached over HTTP have one: a stdio server is a local
+    process with no address, and the plugin leaves its tools alone.
 
     The router's real path is not used: it carries a per-agent session id, which
     would give every agent a different endpoint and collapse all of its tools
     into one.
     """
-    if host:
-        return f"https://{host}/{tool_name}"
-    return f"mcp://{server}/{tool_name}"
+    return f"https://{host}/{tool_name}"
 
 
 def tool_headers(server: str) -> dict:
@@ -197,11 +195,12 @@ class HealClient:
     def enabled(self) -> bool:
         return self.clock() >= self._disabled_until
 
-    def _call(self, method: str, path: str, body: dict) -> tuple[int, Any]:
+    def _call(self, method: str, path: str, body: dict,
+              timeout: Optional[float] = None) -> tuple[int, Any]:
         request = urllib.request.Request(self.url + path, data=json.dumps(body).encode(),
                                          headers=self._headers(), method=method)
         try:
-            with urllib.request.urlopen(request, timeout=self.timeout) as response:
+            with urllib.request.urlopen(request, timeout=timeout or self.timeout) as response:
                 raw = response.read()
                 return response.status, (json.loads(raw) if raw else None)
         except urllib.error.HTTPError as error:
@@ -220,6 +219,25 @@ class HealClient:
             self._disabled_until = self.clock() + DISABLE_SECONDS
             return None
         return body if status == 200 and isinstance(body, dict) else None
+
+    def send_requests(self, calls: list) -> None:
+        """Send one batch of tracked tool calls to POST /v1/requests.
+
+        Raises only when resending could help (network error, timeout, 429,
+        5xx), so the buffer retries once; any other answer, including 404 from
+        a server that predates the route, is final. A disabled project pauses
+        sending like healing.
+        """
+        if not calls or not self.enabled():
+            return
+        try:
+            status, body = self._call("POST", "/v1/requests", {"requests": calls}, timeout=5.0)
+        except Exception as exc:
+            raise RuntimeError("tracked calls not delivered") from exc
+        if status == 403 and isinstance(body, dict) and body.get("error") == "project_disabled":
+            self._disabled_until = self.clock() + DISABLE_SECONDS
+        elif status == 429 or status >= 500:
+            raise RuntimeError(f"tracked calls refused ({status})")
 
     def report(self, attempt_id: str, status_code: int, error: Any = None) -> None:
         """Fire and forget, bounded: a lost report costs one learning signal, never the tool loop."""
@@ -287,14 +305,21 @@ class Healer:
 
     def on_error(self, tool_name: str, args: dict, error_message: str,
                  raw_result: Any = None, server: str = "mcp",
-                 host: Optional[str] = None) -> Optional[Patch]:
-        """Send the failure; the served patch, or None when there is nothing to retry."""
+                 host: Optional[str] = None, response_time_ms: Any = None) -> Optional[Patch]:
+        """Send the failure; the served patch, or None when there is nothing to retry.
+
+        A server with no HTTP address (stdio) is never sent: Colibri heals HTTP
+        services, and the call would need a made-up URL.
+        """
+        if not host:
+            return None
         attempt = {"tool": tool_name, "server": server, "args": traveling_body(args),
                    "error": error_message}
         try:
             payload = heal_payload(trace_id=uuid.uuid4().hex, tool_name=tool_name, server=server,
                                    args=args, error_message=error_message, host=host,
-                                   raw_result=raw_result)
+                                   raw_result=raw_result,
+                                   response_time_ms=response_time_ms if isinstance(response_time_ms, (int, float)) else 0)
             result = self._pool.submit(self.api.heal, payload).result(timeout=self.timeout)
         except FutureTimeout:
             _trace_emit("heal_attempt", {**attempt, "verdict": "timeout"})
