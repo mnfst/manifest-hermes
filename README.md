@@ -105,6 +105,8 @@ hermes plugins install mnfst/manifest-hermes --force
 
 Tool names, arguments, and error text of rejected external calls are sent to Manifest. Credential-named fields are withheld; nested business data is not.
 
+Every other MCP tool call is reported as metadata only: the server, the tool, whether it worked, and how long it took. Never its arguments or result. Local tools are never reported. [Details](docs/guide.md#every-tool-call-is-tracked).
+
 ## More
 
 [Configuration, limits & development](docs/guide.md) · [Node.js SDK](https://github.com/mnfst/manifest-node) · [Python SDK](https://github.com/mnfst/manifest-python) · [PHP SDK](https://github.com/mnfst/manifest-php) · [Website](https://manifest.build)

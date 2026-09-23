@@ -227,7 +227,8 @@ def test_the_retry_carries_the_call_identity_and_never_heals_itself():
                                           error_message="invalid sort", tool_call_id="c1",
                                           session_id="s1", duration_ms=3)
         assert out is None  # the retry failed too: the original error stands
-        assert seen == [{"tool_call_id": "c1", "session_id": "s1", "duration_ms": 3}]
+        # duration_ms is the call's timing, not its identity: it is not passed to the retry.
+        assert seen == [{"tool_call_id": "c1", "session_id": "s1"}]
         assert wait_for(lambda: len(stub.outcomes) == 1)
         assert len(stub.heals) == 1  # one heal per failure, never one for the retry
     finally:
@@ -298,7 +299,7 @@ def test_register_wires_one_seam_and_respects_missing_key(monkeypatch):
 
 def test_plugin_has_no_third_party_imports():
     root = pathlib.Path(__file__).resolve().parents[1]
-    for name in ("__init__.py", "manifest_heal.py"):
+    for name in ("__init__.py", "manifest_heal.py", "manifest_tracking.py"):
         text = (root / name).read_text()
         assert "from mnfst" not in text and "import mnfst" not in text
         assert "import httpx" not in text and "import requests" not in text

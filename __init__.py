@@ -21,6 +21,7 @@ credentials withheld.
 """
 from __future__ import annotations
 
+import atexit
 import json
 import logging
 import os
@@ -29,11 +30,13 @@ from typing import Any, Callable, Dict, Optional
 from urllib.parse import urlsplit
 
 try:  # loaded as a package by Hermes
-    from .manifest_heal import (DEFAULT_URL, NOT_ATTEMPTED, HealClient, Healer, error_body,
-                                healed_args)
+    from .manifest_heal import (DEFAULT_URL, NOT_ATTEMPTED, TOOL_CALL_STATUS, HealClient, Healer,
+                                error_body, healed_args)
+    from .manifest_tracking import CallBuffer, tracked_call
 except ImportError:  # loaded flat, plugin directory on sys.path
-    from manifest_heal import (DEFAULT_URL, NOT_ATTEMPTED, HealClient, Healer,  # type: ignore
-                               error_body, healed_args)
+    from manifest_heal import (DEFAULT_URL, NOT_ATTEMPTED, TOOL_CALL_STATUS,  # type: ignore
+                               HealClient, Healer, error_body, healed_args)
+    from manifest_tracking import CallBuffer, tracked_call  # type: ignore
 
 logger = logging.getLogger(__name__)
 
@@ -167,11 +170,14 @@ def build_callbacks(healer: Healer,
                     service_of: Optional[Callable[[str], Optional[str]]] = None,
                     host_of: Callable[[str], Optional[str]] = _mcp_server_host,
                     dispatch: Optional[Callable[[str, dict, dict], Any]] = None,
+                    tracker: Any = None,
                     ) -> Dict[str, Callable[..., Any]]:
     """The transform_tool_result callback: capture, heal, re-invoke, report.
 
     `dispatch(tool_name, args, call_ids)` is the re-invocation seam (Hermes'
-    own call path by default); tests inject a fake here.
+    own call path by default); tests inject a fake here. `tracker` receives one
+    metadata record per MCP tool call that is not sent to heal (see
+    manifest_tracking); None records nothing.
     """
     service_of = service_of or external_tool_filter()
     dispatch = dispatch or _hermes_dispatch()
@@ -183,19 +189,30 @@ def build_callbacks(healer: Healer,
         finally:
             _RETRYING.reset(token)
 
+    def track(tool_name: str, server: str, status_code: int, duration_ms: Any) -> None:
+        if tracker is not None:
+            tracker.record(tracked_call(server, tool_name, host_of(server), status_code, duration_ms))
+
     def on_result(tool_name: str = "", args: Any = None, result: Any = None,
                   status: Optional[str] = None, error_message: Optional[str] = None,
-                  **ids: Any) -> Optional[str]:
+                  duration_ms: Any = None, **ids: Any) -> Optional[str]:
         try:
             if _RETRYING.get():
-                return None
-            if status != "error" or not isinstance(result, str) or not isinstance(args, dict):
-                return None
+                return None   # the plugin's own retry: neither healed nor tracked
             server = service_of(tool_name)
             if server is None:
+                return None   # a local tool: no service, never reported
+            if status != "error":
+                track(tool_name, server, 200, duration_ms)
+                return None
+            if not healer.api.enabled():
+                # Healing is paused: the failure is not sent to heal, so it is tracked.
+                track(tool_name, server, TOOL_CALL_STATUS, duration_ms)
+                return None
+            if not isinstance(result, str) or not isinstance(args, dict):
                 return None
             patch = healer.on_error(tool_name, args, error_message or "", raw_result=result,
-                                    server=server, host=host_of(server))
+                                    server=server, host=host_of(server), response_time_ms=duration_ms)
             if patch is None:
                 return None
             merged = healed_args(args, patch.body)
@@ -230,7 +247,10 @@ def register(ctx) -> None:
         logger.warning("manifest plugin: MNFST_KEY is not set; nothing registered")
         return
     url = os.environ.get("MNFST_URL", "").strip() or DEFAULT_URL
-    healer = Healer(HealClient(config_key, url))
-    callbacks = build_callbacks(healer)
+    client = HealClient(config_key, url)
+    healer = Healer(client)
+    tracker = CallBuffer(client.send_requests)
+    atexit.register(tracker.flush, 2.0)   # at most two seconds at exit
+    callbacks = build_callbacks(healer, tracker=tracker)
     ctx.register_hook("transform_tool_result", callbacks["transform_tool_result"])
     logger.info("manifest plugin: tool-call repair registered")

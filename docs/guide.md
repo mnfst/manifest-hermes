@@ -37,6 +37,26 @@ failure can collide with the synthetic envelope. The `x-manifest-tool-call: mcp`
 and `x-manifest-mcp-server` headers let the backend segment tool calls from
 plain HTTP traffic.
 
+## Every tool call is tracked
+
+Every MCP tool call the plugin does not send to heal is also reported, as
+metadata only, to `POST /v1/requests`: the same URL a capture would use, the
+status (`200` when the tool call worked, `418` when it failed while healing was
+paused), the duration Hermes measured, and when it happened. Never the
+arguments or the result. Local tools are never reported, and neither is the
+plugin's own retry.
+
+Calls are kept in memory and sent from a background thread: when 500 are
+waiting or every five seconds, at most once per second, 500 per request.
+Recording a call never delays the tool loop. At most 5,000 calls wait; newer
+ones are dropped past that. A send that fails with a network error, 429 or 5xx
+is retried once. Calls still waiting are sent when Hermes exits, for at most
+two seconds. A disabled project pauses sending like healing.
+
+This tracks tool calls, not the HTTP requests behind them: an MCP server
+usually answers HTTP 200 even when a tool fails (the error rides in the
+JSON-RPC body), so the tool's result is the signal.
+
 ## How the retry runs
 
 The retry is a real Hermes tool call (`handle_function_call`), not a bare
