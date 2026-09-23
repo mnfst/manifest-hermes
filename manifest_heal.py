@@ -24,7 +24,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Optional
 
-VERSION = "0.3.0"  # x-release-please-version
+VERSION = "0.4.0"  # x-release-please-version
 DEFAULT_URL = "https://api.manifest.build"
 # Captures of MCP tool calls carry a dedicated sentinel status so the backend can
 # segment them from plain HTTP traffic. 418 is permanently reserved (RFC 2324 /
