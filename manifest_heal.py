@@ -136,21 +136,19 @@ def error_body(error_message: str, raw_result: Any = None) -> Any:
     return {"error": {"message": error_message}}
 
 
-def tool_url(server: str, tool_name: str, host: Optional[str] = None) -> str:
+def tool_url(server: str, tool_name: str, host: str) -> str:
     """The failing call's URL.
 
     Manifest reads the service from the host and the endpoint from the path, so
     the MCP server's own host names the service and each tool is its own
-    endpoint. The server's real host is used when it can be read from the Hermes
-    configuration; the `mcp` scheme is the fallback when it cannot.
+    endpoint. Only servers reached over HTTP have one: a stdio server is a local
+    process with no address, and the plugin leaves its tools alone.
 
     The router's real path is not used: it carries a per-agent session id, which
     would give every agent a different endpoint and collapse all of its tools
     into one.
     """
-    if host:
-        return f"https://{host}/{tool_name}"
-    return f"mcp://{server}/{tool_name}"
+    return f"https://{host}/{tool_name}"
 
 
 def tool_headers(server: str) -> dict:
@@ -308,7 +306,13 @@ class Healer:
     def on_error(self, tool_name: str, args: dict, error_message: str,
                  raw_result: Any = None, server: str = "mcp",
                  host: Optional[str] = None, response_time_ms: Any = None) -> Optional[Patch]:
-        """Send the failure; the served patch, or None when there is nothing to retry."""
+        """Send the failure; the served patch, or None when there is nothing to retry.
+
+        A server with no HTTP address (stdio) is never sent: Colibri heals HTTP
+        services, and the call would need a made-up URL.
+        """
+        if not host:
+            return None
         attempt = {"tool": tool_name, "server": server, "args": traveling_body(args),
                    "error": error_message}
         try:

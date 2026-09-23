@@ -7,8 +7,9 @@ and returns the healed result to the model. The agent never sees Manifest, a
 retry instruction, or the repair — only the tool's response, healed or not.
 One heal and one internal retry per failure, fail-open.
 
-Only MCP tools are repaired, from any MCP server. Built-in and local tools
-are never touched.
+Only MCP tools on servers reached over HTTP are repaired and tracked. Built-in
+and local tools, and stdio MCP servers (a local process, no address), are never
+touched.
 
 Captures carry statusCode 418, the sentinel for a tool call: 418 is permanently
 reserved (RFC 2324 / RFC 9110), so no real API failure can collide with the
@@ -189,9 +190,9 @@ def build_callbacks(healer: Healer,
         finally:
             _RETRYING.reset(token)
 
-    def track(tool_name: str, server: str, status_code: int, duration_ms: Any) -> None:
+    def track(tool_name: str, server: str, host: str, status_code: int, duration_ms: Any) -> None:
         if tracker is not None:
-            tracker.record(tracked_call(server, tool_name, host_of(server), status_code, duration_ms))
+            tracker.record(tracked_call(server, tool_name, host, status_code, duration_ms))
 
     def on_result(tool_name: str = "", args: Any = None, result: Any = None,
                   status: Optional[str] = None, error_message: Optional[str] = None,
@@ -202,17 +203,20 @@ def build_callbacks(healer: Healer,
             server = service_of(tool_name)
             if server is None:
                 return None   # a local tool: no service, never reported
+            host = host_of(server)
+            if not host:
+                return None   # a stdio server: a local process, neither healed nor tracked
             if status != "error":
-                track(tool_name, server, 200, duration_ms)
+                track(tool_name, server, host, 200, duration_ms)
                 return None
             if not healer.api.enabled():
                 # Healing is paused: the failure is not sent to heal, so it is tracked.
-                track(tool_name, server, TOOL_CALL_STATUS, duration_ms)
+                track(tool_name, server, host, TOOL_CALL_STATUS, duration_ms)
                 return None
             if not isinstance(result, str) or not isinstance(args, dict):
                 return None
             patch = healer.on_error(tool_name, args, error_message or "", raw_result=result,
-                                    server=server, host=host_of(server), response_time_ms=duration_ms)
+                                    server=server, host=host, response_time_ms=duration_ms)
             if patch is None:
                 return None
             merged = healed_args(args, patch.body)

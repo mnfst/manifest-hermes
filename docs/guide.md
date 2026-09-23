@@ -21,6 +21,10 @@ A tool is repaired when Hermes registered it under an `mcp-<server>` toolset.
 Everything else counts as local, including a built-in tool that reaches an API,
 so an unreadable registry heals nothing rather than everything. There is no
 opt-in for other tools: a local tool's arguments are never sent anywhere.
+A tool on a stdio MCP server is left alone too: the server is a local process
+with no HTTP address. Only servers configured with a `url` are repaired, which
+also means a server whose URL cannot be read from the Hermes configuration is
+left alone.
 
 ## Where a capture lands
 
@@ -28,8 +32,8 @@ A capture carries the MCP server's real host and the tool as the path, for
 example `https://backend.composio.dev/GMAIL_FETCH_EMAILS`, so the service in
 Manifest is the server that rejected the call and each tool is its own
 endpoint. The router's real path is not used: it carries a per-agent session
-id. When the host cannot be read from the Hermes configuration, the URL falls
-back to `mcp://<server>/<tool>`.
+id. A stdio server has no HTTP address, so its tools are neither repaired nor
+tracked.
 
 Captures carry `statusCode: 418`, the sentinel for a tool call rather than a
 wire status. 418 is permanently reserved (RFC 2324 / RFC 9110), so no real API

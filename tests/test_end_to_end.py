@@ -237,18 +237,18 @@ def test_the_retry_carries_the_call_identity_and_never_heals_itself():
 
 def test_unreachable_or_disabled_api_fails_open():
     down = Healer(HealClient("mnfx_k", "http://127.0.0.1:9", timeout=2.0), timeout=2.0)
-    assert down.on_error("t", {"a": 1}, "e") is None
+    assert down.on_error("t", {"a": 1}, "e", host="h.dev") is None
 
     stub = StubHeal().start()
     try:
         stub.disabled = True
         client = HealClient("mnfx_k", stub.url, timeout=5.0)
         healer = Healer(client, timeout=5.0)
-        assert healer.on_error("t", {"a": 1}, "e") is None
+        assert healer.on_error("t", {"a": 1}, "e", host="h.dev") is None
         assert not client.enabled()  # paused for five minutes after project_disabled
         stub.disabled = False
         stub.result = PATCHED
-        assert healer.on_error("t", {"a": 1}, "e") is None  # still paused, no request sent
+        assert healer.on_error("t", {"a": 1}, "e", host="h.dev") is None  # still paused, no request sent
         assert len(stub.heals) == 1
     finally:
         stub.stop()
@@ -309,8 +309,6 @@ def test_the_real_host_names_the_service_and_the_tool_is_the_endpoint():
     """Manifest reads the service from the host and the endpoint from the path."""
     assert (tool_url("composio", "GMAIL_FETCH_EMAILS", "backend.composio.dev")
             == "https://backend.composio.dev/GMAIL_FETCH_EMAILS")
-    # No configured host to read: the scheme says the row is a tool call.
-    assert tool_url("composio", "GMAIL_FETCH_EMAILS") == "mcp://composio/GMAIL_FETCH_EMAILS"
 
 
 def test_the_headers_say_the_row_is_a_tool_call():
@@ -457,5 +455,28 @@ def test_a_local_tool_failure_never_reaches_the_api():
                                           error_message="exit 1")
         assert out is None
         assert stub.heals == []
+    finally:
+        stub.stop()
+
+
+def test_a_stdio_server_is_neither_healed_nor_tracked():
+    """A stdio MCP server is a local process with no HTTP address: left alone."""
+    stub = StubHeal().start()
+    try:
+        stub.result = PATCHED
+        tracked = []
+
+        class Tracker:
+            def record(self, call):
+                tracked.append(call)
+
+        cb = load_plugin().build_callbacks(make(stub), lambda name: "files", lambda server: None,
+                                           dispatch=fake_dispatch, tracker=Tracker())
+        hook = cb["transform_tool_result"]
+        assert hook(tool_name="read_file", args={"path": "a"}, result='{"error": "bad path"}',
+                    status="error", error_message="bad path", duration_ms=4) is None
+        hook(tool_name="read_file", args={"path": "a"}, result='{"ok": true}', status="ok",
+             duration_ms=4)
+        assert stub.heals == [] and tracked == []
     finally:
         stub.stop()
