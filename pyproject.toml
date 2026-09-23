@@ -8,6 +8,10 @@ requires-python = ">=3.10"
 [project.optional-dependencies]
 dev = ["pytest>=8"]
 
+# Setuptools refuses to guess between several top-level modules; name them.
+[tool.setuptools]
+py-modules = ["manifest_heal", "manifest_tracking"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
