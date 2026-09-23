@@ -4,13 +4,23 @@
   "include-v-in-tag": true,
   "include-component-in-tag": false,
   "pull-request-title-pattern": "chore: release ${version}",
+  "bump-minor-pre-major": true,
+  "last-release-sha": "858e64dde1e4f5b2a05f7849652d17ab772fbb64",
   "packages": {
     ".": {
       "package-name": "manifest-hermes",
       "extra-files": [
         "manifest_heal.py",
-        { "type": "yaml", "path": "plugin.yaml", "jsonpath": "$.version" },
-        { "type": "toml", "path": "pyproject.toml", "jsonpath": "$.project.version" }
+        {
+          "type": "yaml",
+          "path": "plugin.yaml",
+          "jsonpath": "$.version"
+        },
+        {
+          "type": "toml",
+          "path": "pyproject.toml",
+          "jsonpath": "$.project.version"
+        }
       ]
     }
   }
