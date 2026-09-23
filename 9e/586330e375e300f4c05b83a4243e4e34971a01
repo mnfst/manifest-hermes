@@ -1,0 +1,25 @@
+README.md
+  s_eb3d812ee7c509::t_c097c0bc77021a 108
+docs/guide.md
+  s_eb3d812ee7c509::t_86e692d27eebfe 42-43,46-47
+manifest_tracking.py
+  s_eb3d812ee7c509::t_6614f2328b6db4 5,36-42
+tests/test_tracking.py
+  s_eb3d812ee7c509::t_0931135435cee8 75-77
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "9e586330e375e300f4c05b83a4243e4e34971a01",
+  "prompts": {},
+  "sessions": {
+    "s_eb3d812ee7c509": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "870ec716-ab0e-4fba-98d8-d89732a224f1",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Guillaume Gay <guillaume.gay@protonmail.com>"
+    }
+  }
+}
