@@ -4,7 +4,7 @@
 
 # Manifest for Hermes
 
-**Turn 🔴 rejected tool calls into 🟢 successful ones in real time.**
+**The API resilience layer for your Hermes agent.**
 
 [![CI](https://github.com/mnfst/manifest-hermes/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/mnfst/manifest-hermes/actions/workflows/ci.yml)
 [![Hermes plugin](https://img.shields.io/badge/Hermes-plugin-942FFA)](https://github.com/mnfst/manifest-hermes)
@@ -17,17 +17,17 @@
 
 ## What is Manifest
 
-Manifest is a self-healing layer that fixes and retries failed API requests on the fly.
+Manifest is the API resilience layer for your apps and agents. It works with every API they call: external services, your internal APIs and MCP tools.
 
-* 🎯 **Fix failures automatically** before they impact your users.
-* 🔔 **Get notified of root causes** so you can fix them permanently.
-* 🔌 **Works across your stack** with internal APIs, external services, and agent tools.
+* 🗺️ **See every API your agent depends on**, and how reliable each one is.
+* 🎯 **Repair failed tool calls on the fly**, so your agent keeps working.
+* 🛠️ **Know what to fix**, with a prompt for your coding agent.
 
-This plugin brings that layer to [Hermes](https://github.com/NousResearch/hermes-agent): an MCP tool call is rejected, Manifest repairs the arguments, the retry succeeds. The model never sees the failure.
+This plugin brings that layer to [Hermes](https://github.com/NousResearch/hermes-agent). When an MCP tool call is rejected and Manifest has a patch for the error, Manifest repairs the arguments and the plugin retries the call. The model never sees the failure.
 
 ## How it works
 
-![How Manifest heals a failed request: a 400 reaches Manifest, drops to a patch from the knowledge base or the healing agents, and is retried once, returning a 200 OK](./docs/sdk-flow-diagram.png)
+![How the plugin works: a failed tool call is sent to Manifest with its error, patched, and retried once, returning a 200 OK](./docs/sdk-flow-diagram.png)
 
 ## Prerequisites
 
@@ -36,29 +36,29 @@ This plugin brings that layer to [Hermes](https://github.com/NousResearch/hermes
 
 ## Get started
 
-```sh
-hermes plugins install mnfst/manifest-hermes
-hermes plugins enable manifest
-```
-
-No other dependency.
-
-## Setup
-
 1. Create a project in your [Manifest dashboard](https://dashboard.manifest.build) and copy its project key.
-2. Set the key as an environment variable, when prompted or in the Hermes env file:
 
-```sh
-export MNFST_KEY='your-project-key'
-```
+2. Update Hermes, then install and enable the plugin. Older versions of Hermes refuse it:
 
-3. Restart Hermes so the plugin loads.
+   ```sh
+   hermes update
+   hermes plugins install mnfst/manifest-hermes
+   hermes plugins enable manifest
+   ```
 
-That is the whole setup. `MNFST_URL` points the plugin at another Manifest endpoint if you need one. There is no other configuration. Self-healing is enabled by default in your project settings.
+3. Store your key in the settings of Hermes:
+
+   ```sh
+   hermes config set MNFST_KEY your-project-key
+   ```
+
+4. Start a new Hermes session so the plugin loads. If you run the Hermes gateway, restart it with `hermes gateway restart`.
+
+That is the whole setup. `MNFST_URL` points the plugin at another Manifest endpoint if you need one. No other dependency and no other configuration.
 
 ## Try it
 
-Let your agent make a tool call that would normally be rejected. Manifest catches it, repairs the arguments, and retries:
+When your agent makes a tool call that the MCP server rejects, and Manifest has a patch for that error, the plugin repairs the arguments and retries:
 
 ```
 You: fetch my 5 most recent emails
@@ -69,13 +69,14 @@ You: fetch my 5 most recent emails
 Agent: Here are your 5 most recent emails…
 ```
 
-The agent only ever sees the healed result. Check your [Manifest dashboard](https://dashboard.manifest.build) to see all repairs and insights.
+The agent only ever sees the healed result. A rejection Manifest has no patch for yet reaches the agent unchanged, and appears in your [Manifest dashboard](https://dashboard.manifest.build), grouped in an issue.
 
 ## What is covered
 
 | The agent calls… | Covered |
 | --- | --- |
-| An MCP tool, from any MCP server | ✅ healed |
+| An MCP tool, on a server reached over HTTP | ✅ healed |
+| An MCP tool, on a server that runs as a program on your machine (stdio) | ❌ not seen |
 | A built-in tool, including API-backed ones such as `web_search` | ❌ never repaired |
 | A local tool (terminal, file, memory) | ❌ never sent anywhere |
 
@@ -109,4 +110,4 @@ Every other MCP tool call to a server reached over HTTP is reported as metadata 
 
 ## More
 
-[Configuration, limits & development](docs/guide.md) · [Node.js SDK](https://github.com/mnfst/manifest-node) · [Python SDK](https://github.com/mnfst/manifest-python) · [PHP SDK](https://github.com/mnfst/manifest-php) · [Website](https://manifest.build)
+[Documentation](https://docs.manifest.build) · [Configuration, limits & development](docs/guide.md) · [Node.js SDK](https://github.com/mnfst/manifest-node) · [Python SDK](https://github.com/mnfst/manifest-python) · [PHP SDK](https://github.com/mnfst/manifest-php) · [Website](https://manifest.build)
