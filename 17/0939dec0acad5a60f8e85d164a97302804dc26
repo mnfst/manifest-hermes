@@ -1,0 +1,37 @@
+README.md
+  s_d818a26c4e3030::t_0458164cda47de 117
+docs/guide.md
+  s_d818a26c4e3030::t_990db5ad589eda 82-83
+manifest_filter.py
+  s_1433fd65404e08::t_68e12b58fe5058 37-56,89
+manifest_heal.py
+  s_d818a26c4e3030::t_8959d3ce84c291 179-189,214,311-313,318-322,341-349,351-353,372-377
+tests/fixtures/url-filter.json
+  s_d818a26c4e3030::t_f4600eb4bbc43a 17-18,56-64
+tests/test_review_findings.py
+  s_d818a26c4e3030::t_36b42b215a79be 1-81
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "170939dec0acad5a60f8e85d164a97302804dc26",
+  "prompts": {},
+  "sessions": {
+    "s_1433fd65404e08": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c1a8378c-067e-4760-88dd-c36de472f5b5",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Guillaume Gay <guillaume.gay@protonmail.com>"
+    },
+    "s_d818a26c4e3030": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2a03df1d-91b9-4237-ada0-b7cb17ab89ea",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Guillaume Gay <guillaume.gay@protonmail.com>"
+    }
+  }
+}
