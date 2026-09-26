@@ -1,0 +1,27 @@
+CONTRIBUTING.md
+  s_554296f5066873::t_914df879263df9 22-23
+pyproject.toml
+  s_554296f5066873::t_914df879263df9 1,3
+tests/test_plugin.py
+  s_554296f5066873::t_914df879263df9 103-104,106-108
+.github/dependabot.yml
+  s_554296f5066873::t_914df879263df9 1-17
+docs/guide.md
+  s_554296f5066873::t_914df879263df9 16-17
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "005e7db44a618f18ba156e3439ee9f847606580d",
+  "prompts": {},
+  "sessions": {
+    "s_554296f5066873": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "bebb5b82-c9a7-451d-a0bc-5b1de0e89354",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Guillaume Gay <guillaume.gay@protonmail.com>"
+    }
+  }
+}
