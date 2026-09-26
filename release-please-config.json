@@ -10,7 +10,6 @@
     ".": {
       "package-name": "manifest-hermes",
       "extra-files": [
-        "manifest_heal.py",
         {
           "type": "yaml",
           "path": "plugin.yaml",

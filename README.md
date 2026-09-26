@@ -20,14 +20,14 @@
 Manifest is the API resilience layer for your apps and agents. It works with every API they call: external services, your internal APIs and MCP tools.
 
 * 🗺️ **See every API your agent depends on**, and how reliable each one is.
-* 🎯 **Repair failed tool calls on the fly**, so your agent keeps working.
+* 🎯 **Repair failed API requests on the fly**, so your agent keeps working.
 * 🛠️ **Know what to fix**, with a prompt for your coding agent.
 
-This plugin brings that layer to [Hermes](https://github.com/NousResearch/hermes-agent). When an MCP tool call is rejected and Manifest has a patch for the error, Manifest repairs the arguments and the plugin retries the call. The model never sees the failure.
+This plugin brings that layer to [Hermes](https://github.com/NousResearch/hermes-agent). It installs the [Manifest Python SDK](https://github.com/mnfst/manifest-python) and starts it inside every Hermes process: the interactive session, the gateway and its workers. From there, every HTTP call Hermes makes is tracked, and a failure Manifest has a patch for is repaired and retried before Hermes sees it.
 
 ## How it works
 
-![How the plugin works: a failed tool call is sent to Manifest with its error, patched, and retried once, returning a 200 OK](./docs/sdk-flow-diagram.png)
+![How the plugin works: a failed request is sent to Manifest with its error, patched, and retried once, returning a 200 OK](./docs/sdk-flow-diagram.png)
 
 ## Prerequisites
 
@@ -38,7 +38,7 @@ This plugin brings that layer to [Hermes](https://github.com/NousResearch/hermes
 
 1. Create a project in your [Manifest dashboard](https://dashboard.manifest.build) and copy its project key.
 
-2. Update Hermes, then install and enable the plugin. Older versions of Hermes refuse it:
+2. Update Hermes, then install and enable the plugin. Hermes installs the SDK (`mnfst`) with it:
 
    ```sh
    hermes update
@@ -54,41 +54,27 @@ This plugin brings that layer to [Hermes](https://github.com/NousResearch/hermes
 
 4. Start a new Hermes session so the plugin loads. If you run the Hermes gateway, restart it with `hermes gateway restart`.
 
-That is the whole setup. `MNFST_URL` points the plugin at another Manifest endpoint if you need one. No other dependency and no other configuration.
+That is the whole setup. `MNFST_URL` points the SDK at another Manifest endpoint if you need one.
 
 ## Try it
 
-When your agent makes a tool call that the MCP server rejects, and Manifest has a patch for that error, the plugin repairs the arguments and retries:
+Ask your agent for something that reaches an API: search the web, or use a hosted MCP server. Each call appears in your [Manifest dashboard](https://dashboard.manifest.build) under the service it reached, with its status and how long it took.
 
-```
-You: fetch my 5 most recent emails
-
-  GMAIL_FETCH_EMAILS { max_results: "5" }   ← rejected, max_results must be an integer
-  GMAIL_FETCH_EMAILS { max_results: 5 }     ← Manifest's patch, retried automatically
-
-Agent: Here are your 5 most recent emails…
-```
-
-The agent only ever sees the healed result. A rejection Manifest has no patch for yet reaches the agent unchanged, and appears in your [Manifest dashboard](https://dashboard.manifest.build), grouped in an issue.
+When a call is rejected with a 4xx error, the request and the error are sent to Manifest. A rejection Manifest has no patch for yet reaches Hermes unchanged, and appears in the dashboard, grouped in an issue. Once there is a patch, the next request that fails the same way is repaired and retried, and Hermes only ever sees the answer to the retry.
 
 ## What is covered
 
-| The agent calls… | Covered |
+| Hermes… | Covered |
 | --- | --- |
-| An MCP tool, on a server reached over HTTP | ✅ healed |
-| An MCP tool, on a server that runs as a program on your machine (stdio) | ❌ not seen |
-| A built-in tool, including API-backed ones such as `web_search` | ❌ never repaired |
-| A local tool (terminal, file, memory) | ❌ never sent anywhere |
+| Calls an API over httpx or requests: web search and extract, vision, X search, the LLM itself | ✅ tracked and healed |
+| Uses an MCP server reached over HTTP | ✅ tracked; a rejected tool call is not healed |
+| Calls an API over aiohttp or urllib: Home Assistant, the Discord, Feishu and Slack adapters | ❌ not seen yet |
+| Uses an MCP server that runs as a program on your machine (stdio) | ❌ not seen, no HTTP involved |
+| Runs a CLI or a script (curl, gh, a Python script) | ❌ not seen, a separate process |
 
-Hermes registers MCP tools under an `mcp-<server>` toolset. A tool the registry cannot place counts as local, so an unreadable registry heals nothing rather than everything.
+An MCP server answers HTTP 200 even when it rejects a tool call: the error travels in the JSON-RPC body. The SDK tracks those calls as 200 and only sends 4xx responses to heal, so a rejected tool call is not healed.
 
-Hermes places a capture under the MCP server that rejected the call, with each tool as its own endpoint.
-
-## How the repair works
-
-`transform_tool_result` sends a failed tool result to the Manifest heal API. When corrected arguments come back, the plugin **re-invokes the tool itself** and returns the healed result. The model never sees Manifest, a retry instruction, or the repair. One heal and one internal retry per failure; anything unexpected passes the original result through.
-
-The retry goes through Hermes' own call path, so every hook and guard that ran on the first call runs again. [How the retry, the 418 sentinel and the measurement log work](docs/guide.md).
+Which calls are healed, and how, is set per service in the dashboard.
 
 ## Updating
 
@@ -102,11 +88,25 @@ That pulls the latest commit into `~/.hermes/plugins/manifest`. Restart Hermes a
 hermes plugins install mnfst/manifest-hermes --force
 ```
 
+## Choosing which calls reach Manifest
+
+Keep calls out of Manifest entirely: they are neither repaired nor tracked, and nothing about them leaves your agent. Each entry is a domain or a domain with a path:
+
+```sh
+hermes config set MNFST_ALLOWLIST api.tavily.com,mcp.linear.app   # only these services
+hermes config set MNFST_DENYLIST api.openai.com                    # never this one
+```
+
+- A domain covers its subdomains, with or without a path: `linear.app` and `linear.app/mcp` both match `mcp.linear.app`.
+- A path matches whole segments, and is case-sensitive.
+- A scheme, port, query or fragment in an entry is ignored. `*` in a path is not supported yet: the entry is skipped with a warning.
+- The denylist wins over the allowlist. With no allowlist, every call is eligible.
+
+The lists are read by the SDK, from the first mnfst release after 1.2.0. With mnfst 1.2.0 they are ignored.
+
 ## Privacy
 
-Tool names, arguments, and error text of rejected external calls are sent to Manifest. Credential-named fields are withheld; nested business data is not.
-
-Every other MCP tool call to a server reached over HTTP is reported as metadata only: the server, the tool, whether it worked, and how long it took. Never its arguments or result. Local tools are never reported. [Details](docs/guide.md#every-tool-call-is-tracked).
+Every call is reported as metadata only: method, URL without its query string, status and timing. A call rejected with a 4xx error, other than 401, 402, 403 and 429, is sent in full so it can be repaired, with credential-named fields withheld. [What the SDK sends](https://github.com/mnfst/manifest-python/blob/main/docs/guide.md#data-sent-to-manifest).
 
 ## More
 

@@ -1,16 +1,19 @@
-# Development only. The plugin itself has no dependencies and is installed with
-# `hermes plugins install`, never with pip.
+# Development metadata, and the plugin's only dependency list: Hermes installs
+# [project].dependencies from this file when it installs or enables the plugin,
+# and Dependabot keeps mnfst current here. Do not repeat it in plugin.yaml.
+# The plugin itself is installed with `hermes plugins install`, never with pip.
 [project]
 name = "manifest-hermes-dev"
 version = "0.4.0"
 requires-python = ">=3.10"
+dependencies = ["mnfst>=1.2.0,<2"]
 
 [project.optional-dependencies]
-dev = ["pytest>=8"]
+dev = ["pytest>=8", "pyyaml>=6"]
 
-# Setuptools refuses to guess between several top-level modules; name them.
+# Nothing to package: the plugin is the repository root, loaded by Hermes.
 [tool.setuptools]
-py-modules = ["manifest_heal", "manifest_tracking"]
+py-modules = []
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

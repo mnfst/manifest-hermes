@@ -1,7 +1,7 @@
 name: Prepare release
 
 # Conventional commits accumulate in one rolling release PR. Merging that PR
-# bumps plugin.yaml, pyproject.toml and VERSION in manifest_heal.py together,
+# bumps plugin.yaml and pyproject.toml together,
 # writes the changelog and tags the release. Hermes installs the plugin from
 # the repository, so nothing is released until that PR is merged.
 

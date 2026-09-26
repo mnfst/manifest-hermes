@@ -22,8 +22,8 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - run: python -m pip install -e ".[dev]"
       - run: python -m pytest -q
-      # The plugin is installed by copy, not by pip, so it must import on its own.
-      - run: python -c "import manifest_heal, manifest_tracking, __init__"
+      # Hermes loads the plugin by copy, from its own directory.
+      - run: python -c "import __init__"
 
   plugin-manifest:
     runs-on: ubuntu-latest
