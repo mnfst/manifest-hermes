@@ -102,7 +102,7 @@ hermes config set MNFST_DENYLIST api.openai.com                    # never this 
 - A scheme, port, query or fragment in an entry is ignored. `*` in a path is not supported yet: the entry is skipped with a warning.
 - The denylist wins over the allowlist. With no allowlist, every call is eligible.
 
-The lists are read by the SDK, from the first mnfst release after 1.2.0. With mnfst 1.2.0 they are ignored.
+The lists are read by the SDK, from mnfst 1.3.0.
 
 ## Privacy
 
