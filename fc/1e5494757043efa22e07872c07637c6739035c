@@ -1,0 +1,21 @@
+README.md
+  s_067891c79a3ecd::t_36d2df8725046e 105
+pyproject.toml
+  s_067891c79a3ecd::t_b0664949d2c57a 9
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "fc1e5494757043efa22e07872c07637c6739035c",
+  "prompts": {},
+  "sessions": {
+    "s_067891c79a3ecd": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "bfaa0496-d823-4e52-90fd-bd032e7cc33d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Guillaume Gay <guillaume.gay@protonmail.com>"
+    }
+  }
+}
