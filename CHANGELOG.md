@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.1](https://github.com/mnfst/manifest-hermes/compare/v0.5.0...v0.5.1) (2026-09-26)
+
+
+### Bug Fixes
+
+* require mnfst 1.3.0, the first SDK that reads the allowlist ([#22](https://github.com/mnfst/manifest-hermes/issues/22)) ([8d990ea](https://github.com/mnfst/manifest-hermes/commit/8d990eabb40b772508e158b4ab5607f40907dfb9))
+
 ## [0.5.0](https://github.com/mnfst/manifest-hermes/compare/v0.4.0...v0.5.0) (2026-09-26)
 
 
