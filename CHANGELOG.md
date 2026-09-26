@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.5.0](https://github.com/mnfst/manifest-hermes/compare/v0.4.0...v0.5.0) (2026-09-26)
+
+
+### ⚠ BREAKING CHANGES
+
+* the transform_tool_result hook, the synthetic 418 tool call captures and the plugin's own heal and tracking code are removed. Rejected MCP tool calls are no longer repaired.
+
+### Features
+
+* start the Manifest Python SDK inside Hermes instead of healing tool calls ([#20](https://github.com/mnfst/manifest-hermes/issues/20)) ([12fee74](https://github.com/mnfst/manifest-hermes/commit/12fee746cafc2f74173998c231cfdc57cf0ff0dc))
+
 ## [0.4.0](https://github.com/mnfst/manifest-hermes/compare/v0.3.0...v0.4.0) (2026-09-23)
 
 
