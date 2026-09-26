@@ -10,7 +10,7 @@ dev = ["pytest>=8"]
 
 # Setuptools refuses to guess between several top-level modules; name them.
 [tool.setuptools]
-py-modules = ["manifest_heal", "manifest_tracking"]
+py-modules = ["manifest_heal", "manifest_tracking", "manifest_filter"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

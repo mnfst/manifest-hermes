@@ -102,6 +102,19 @@ That pulls the latest commit into `~/.hermes/plugins/manifest`. Restart Hermes a
 hermes plugins install mnfst/manifest-hermes --force
 ```
 
+## Choosing which tool calls reach Manifest
+
+Keep tool calls out of Manifest entirely: they are neither repaired nor tracked, and nothing about them leaves your agent. A tool call is matched as `https://<MCP server host>/<tool name>`, so each entry is a domain or a domain with a tool name:
+
+```sh
+MNFST_ALLOWLIST=linear.app                      # only Linear's MCP server
+MNFST_DENYLIST=linear.app/delete_issue,internal.example.com   # never these
+```
+
+- A domain covers its subdomains, with or without a tool name: `linear.app` and `linear.app/list_issues` both match `mcp.linear.app`.
+- A scheme or port in an entry is ignored. `*` is not supported yet: the entry is skipped with a warning in the Hermes log, and an allowlist made only of skipped entries lets nothing through.
+- The denylist wins over the allowlist. With no allowlist, every MCP tool call over HTTP is eligible.
+
 ## Privacy
 
 Tool names, arguments, and error text of rejected external calls are sent to Manifest. Credential-named fields are withheld; nested business data is not.

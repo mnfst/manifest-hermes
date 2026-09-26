@@ -16,7 +16,11 @@ reserved (RFC 2324 / RFC 9110), so no real API failure can collide with the
 synthetic envelope. The `x-manifest-tool-call: mcp` and `x-manifest-mcp-server`
 headers mark the row for backend segmentation.
 
-Environment: MNFST_KEY (required) and MNFST_URL (optional). Every heal
+Environment: MNFST_KEY (required) and MNFST_URL (optional).
+MNFST_ALLOWLIST / MNFST_DENYLIST (optional, comma-separated) keep tool calls out
+of Manifest entirely: neither healed nor tracked. An entry is a domain
+(linear.app, subdomains included) or a domain with a tool name
+(mcp.linear.app/list_issues); the denylist wins (see manifest_filter). Every heal
 attempt and outcome is appended to HERMES_TRACE_DIR for measurement,
 credentials withheld.
 """
@@ -32,12 +36,14 @@ from urllib.parse import urlsplit
 
 try:  # loaded as a package by Hermes
     from .manifest_heal import (DEFAULT_URL, NOT_ATTEMPTED, TOOL_CALL_STATUS, HealClient, Healer,
-                                error_body, healed_args)
+                                error_body, healed_args, tool_url)
     from .manifest_tracking import CallBuffer, tracked_call
+    from .manifest_filter import Rules, is_excluded, pick_rules
 except ImportError:  # loaded flat, plugin directory on sys.path
     from manifest_heal import (DEFAULT_URL, NOT_ATTEMPTED, TOOL_CALL_STATUS,  # type: ignore
-                               HealClient, Healer, error_body, healed_args)
+                               HealClient, Healer, error_body, healed_args, tool_url)
     from manifest_tracking import CallBuffer, tracked_call  # type: ignore
+    from manifest_filter import Rules, is_excluded, pick_rules  # type: ignore
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +68,8 @@ def _netloc(value: str) -> Optional[str]:
     """The bare host of a URL or a host string: no scheme, path, userinfo or case."""
     url = value if "://" in value else "//" + value
     return urlsplit(url).netloc.split("@")[-1].lower() or None
+
+
 
 
 def _mcp_server_host(server: str) -> Optional[str]:
@@ -172,13 +180,16 @@ def build_callbacks(healer: Healer,
                     host_of: Callable[[str], Optional[str]] = _mcp_server_host,
                     dispatch: Optional[Callable[[str, dict, dict], Any]] = None,
                     tracker: Any = None,
+                    allow: Optional[Rules] = None,
+                    deny: Rules = (),
                     ) -> Dict[str, Callable[..., Any]]:
     """The transform_tool_result callback: capture, heal, re-invoke, report.
 
     `dispatch(tool_name, args, call_ids)` is the re-invocation seam (Hermes'
     own call path by default); tests inject a fake here. `tracker` receives one
     metadata record per MCP tool call that is not sent to heal (see
-    manifest_tracking); None records nothing.
+    manifest_tracking); None records nothing. `allow` / `deny` are the parsed
+    allowlist and denylist (see manifest_filter); `allow` is None when none was given.
     """
     service_of = service_of or external_tool_filter()
     dispatch = dispatch or _hermes_dispatch()
@@ -206,6 +217,8 @@ def build_callbacks(healer: Healer,
             host = host_of(server)
             if not host:
                 return None   # a stdio server: a local process, neither healed nor tracked
+            if is_excluded(allow, deny, tool_url(server, tool_name, host)):
+                return None   # kept out by the allowlist or denylist: neither healed nor tracked
             if status != "error":
                 track(tool_name, server, host, 200, duration_ms)
                 return None
@@ -255,6 +268,11 @@ def register(ctx) -> None:
     healer = Healer(client)
     tracker = CallBuffer(client.send_requests)
     atexit.register(tracker.flush, 2.0)   # at most two seconds at exit
-    callbacks = build_callbacks(healer, tracker=tracker)
+    allow, bad_allow = pick_rules(None, os.environ.get("MNFST_ALLOWLIST"))
+    deny, bad_deny = pick_rules(None, os.environ.get("MNFST_DENYLIST"))
+    if bad_allow or bad_deny:
+        logger.warning("manifest plugin: ignoring unreadable allowlist/denylist entries: %s",
+                       ", ".join(bad_allow + bad_deny))
+    callbacks = build_callbacks(healer, tracker=tracker, allow=allow, deny=deny or ())
     ctx.register_hook("transform_tool_result", callbacks["transform_tool_result"])
     logger.info("manifest plugin: tool-call repair registered")

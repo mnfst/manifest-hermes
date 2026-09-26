@@ -5,13 +5,15 @@ Configuration, limits and development for the Manifest Hermes plugin. The
 
 ## Configuration
 
-Two variables, both read once at registration. The environment cannot change
+Four variables, all read once at registration. The environment cannot change
 without a restart.
 
 | Variable | What it does |
 | --- | --- |
 | `MNFST_KEY` | Your Manifest project key. Required; without it the plugin registers nothing. |
 | `MNFST_URL` | Point at another Manifest endpoint. Optional. |
+| `MNFST_ALLOWLIST` | Only these tool calls reach Manifest. Optional ([entries](../README.md#choosing-which-tool-calls-reach-manifest)). |
+| `MNFST_DENYLIST` | These tool calls never reach Manifest; wins over the allowlist. Optional. |
 
 The heal request waits 20 seconds for a patch, then the original result stands.
 
