@@ -1,101 +1,75 @@
 # Guide
 
-Configuration, limits and development for the Manifest Hermes plugin. The
+Configuration and development for the Manifest Hermes plugin. The
 [README](../README.md) covers install and setup.
+
+## What the plugin does
+
+Nothing but start the [Manifest Python SDK](https://github.com/mnfst/manifest-python)
+(`mnfst`) in each Hermes process. Healing, tracking, credential masking and the
+allowlist live in the SDK; its
+[guide](https://github.com/mnfst/manifest-python/blob/main/docs/guide.md)
+covers how each one works.
+
+- **Install.** Hermes reads the plugin's dependencies from `[project].dependencies`
+  in `pyproject.toml` when you install or enable it, and installs them again after
+  `hermes update` rebuilds its virtual environment. Dependabot raises the
+  `mnfst` version there with each SDK release.
+- **Start.** Hermes calls `register()` in every Hermes process: the interactive
+  session, the gateway and its workers. It has loaded `~/.hermes/.env` by then,
+  so a key set with `hermes config set MNFST_KEY` is in the environment.
+  `register()` calls `mnfst.manifest()` once, which patches the HTTP clients of
+  that process.
+- **Fail open.** Without `MNFST_KEY`, with `mnfst` missing, or when the SDK fails
+  to start, the plugin logs a warning and Hermes runs as if it were not installed.
+
+The plugin registers no Hermes hook.
+
+## Why not `mnfst run hermes`
+
+`mnfst run` starts the SDK through a `sitecustomize` on `PYTHONPATH`. In Hermes:
+
+- the gateway runs as a service, so its launch command would have to be edited;
+- `sitecustomize` checks `MNFST_KEY` before Hermes loads `~/.hermes/.env`;
+- `hermes update` can rebuild the virtual environment and drop a hand-installed
+  `mnfst`;
+- `PYTHONPATH` and `MNFST_KEY` pass down to every Python script the agent runs,
+  which would then report to Manifest too.
 
 ## Configuration
 
-Two variables, both read once at registration. The environment cannot change
-without a restart.
+All read by the SDK, once, when the plugin starts it. The environment cannot
+change without a restart.
 
 | Variable | What it does |
 | --- | --- |
-| `MNFST_KEY` | Your Manifest project key. Required; without it the plugin registers nothing. |
+| `MNFST_KEY` | Your Manifest project key. Required; without it the plugin starts nothing. |
 | `MNFST_URL` | Point at another Manifest endpoint. Optional. |
+| `MNFST_ALLOWLIST` | Only these calls reach Manifest. Optional ([entries](../README.md#choosing-which-calls-reach-manifest)). |
+| `MNFST_DENYLIST` | These calls never reach Manifest; wins over the allowlist. Optional. |
 
-The heal request waits 20 seconds for a patch, then the original result stands.
+## MCP servers
 
-### What gets repaired
+Hermes' MCP client sends its requests through httpx2, which the SDK patches, so
+every call to an MCP server reached over HTTP is tracked, under the server's
+host. A server that runs as a local process (stdio) makes no HTTP call and is not
+seen.
 
-A tool is repaired when Hermes registered it under an `mcp-<server>` toolset.
-Everything else counts as local, including a built-in tool that reaches an API,
-so an unreadable registry heals nothing rather than everything. There is no
-opt-in for other tools: a local tool's arguments are never sent anywhere.
-A tool on a stdio MCP server is left alone too: the server is a local process
-with no HTTP address. Only servers configured with a `url` are repaired, which
-also means a server whose URL cannot be read from the Hermes configuration is
-left alone.
+An MCP server answers HTTP 200 even when it rejects a tool call: the error
+travels in the JSON-RPC body. The SDK tracks the call as a 200 and only sends
+4xx responses to heal, so a rejected tool call is not healed.
 
-## Where a capture lands
+Before connecting to a server, Hermes checks it with requests that are expected
+to fail, such as a `HEAD` answered with 405 and a `GET` answered with 400. Those
+are 4xx responses, so the SDK sends them to heal like any other; Manifest
+answers that it has no patch.
 
-A capture carries the MCP server's real host and the tool as the path, for
-example `https://backend.composio.dev/GMAIL_FETCH_EMAILS`, so the service in
-Manifest is the server that rejected the call and each tool is its own
-endpoint. The router's real path is not used: it carries a per-agent session
-id. A stdio server has no HTTP address, so its tools are neither repaired nor
-tracked.
-
-Captures carry `statusCode: 418`, the sentinel for a tool call rather than a
-wire status. 418 is permanently reserved (RFC 2324 / RFC 9110), so no real API
-failure can collide with the synthetic envelope. The `x-manifest-tool-call: mcp`
-and `x-manifest-mcp-server` headers let the backend segment tool calls from
-plain HTTP traffic.
-
-## Every tool call is tracked
-
-Every MCP tool call the plugin does not send to heal, on a server reached over
-HTTP, is also reported, as metadata only, to `POST /v1/requests`: the same URL a capture would use, the
-status (`200` when the tool call worked, `418` when it failed while healing was
-paused), the duration Hermes measured, and when it happened. Never the
-arguments or the result. Local tools and stdio MCP servers (a local process,
-no HTTP address) are never reported, and neither is the plugin's own retry.
-
-Calls are kept in memory and sent from a background thread: when 500 are
-waiting or every five seconds, at most once per second, 500 per request.
-Recording a call never delays the tool loop. At most 5,000 calls wait; newer
-ones are dropped past that. A send that fails with a network error, 429 or 5xx
-is retried once. Calls still waiting are sent when Hermes exits, for at most
-two seconds. A disabled project pauses sending like healing.
-
-This tracks tool calls, not the HTTP requests behind them: an MCP server
-usually answers HTTP 200 even when a tool fails (the error rides in the
-JSON-RPC body), so the tool's result is the signal.
-
-## How the retry runs
-
-The retry is a real Hermes tool call (`handle_function_call`), not a bare
-registry dispatch. It runs through the `pre_tool_call` policy hooks, edit
-approval and the tool-execution middleware with the original call's identity,
-so server-dictated arguments get every check the first call got and a policy
-plugin sees the retry.
-
-The agent loop owns `post_tool_call` and fires it once per model-facing call,
-with the final (healed) result.
-
-A patch that changes nothing, or a retry that never reaches the tool, is
-reported as *not attempted* rather than as a failure.
-
-No Hermes middleware is used, so the plugin runs on any Hermes version.
-
-## Measuring
-
-Every heal attempt and retry outcome appends one JSON line to `$HERMES_TRACE_DIR/events.jsonl` (default
-`~/.hermes/logs/hermes-trace/`):
-
-```
-heal_attempt  {tool, args, error, verdict: patched|no_patch|timeout|transport_error, patch?, attempt_id}
-heal_outcome  {tool, attempt_id, patched_args, retry_result: success|failed|not_attempted, status_code?}
-```
-
-The funnel, attempts to patches to retries succeeded, is the effectiveness
-measure. The directory is created on first write. Logged arguments are the ones
-that travelled: credential-named fields are withheld here as well as on the
-wire.
+Hermes checks a tool call's arguments against the tool's schema before sending
+it. A call that fails that check, such as a string where the schema asks for an
+integer, never reaches the server, so no request is made and Manifest sees
+nothing.
 
 ## Development
-
-The plugin is installed by copy, not by pip, so it must import with no
-dependencies of its own. Install the dev extras to run the suite:
 
 ```sh
 python -m pip install -e ".[dev]"

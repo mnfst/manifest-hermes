@@ -18,21 +18,22 @@ python -m pip install -e ".[dev]"
 ```
 
 The dev extras exist only to run the suite. The plugin itself is installed by
-copy, with `hermes plugins install`, never with pip, so it must import with no
-dependencies of its own.
+copy, with `hermes plugins install`, never with pip. Its one dependency, `mnfst`,
+is declared only in `pyproject.toml`: Hermes installs it from there, and
+Dependabot opens a pull request there for each new release.
 
 ## Development
 
 ```bash
 python -m pytest -q
-python -c "import manifest_heal, __init__"   # The import check CI also runs
+python -c "import __init__"   # The import check CI also runs
 ```
 
 CI runs the same commands on Python 3.10, 3.13 and 3.14, plus a `plugin.yaml`
 validation.
 
-Bump `version` in `plugin.yaml` when the plugin's behavior changes; that is what
-`hermes plugins update manifest` reports.
+release-please bumps `version` in `plugin.yaml` and `pyproject.toml` together;
+that is what `hermes plugins update manifest` reports.
 
 ## Making Changes
 
@@ -52,12 +53,10 @@ Use conventional commit titles:
 
 ## Supported Platforms
 
-The plugin works with:
-- Hermes, through the `transform_tool_result` hook
-- MCP tools, from any MCP server
-
-Built-in tools and local tools (terminal, file, memory) are never repaired. See
-[the coverage table](README.md#what-is-covered).
+The plugin starts the Manifest Python SDK inside Hermes, so it sees what the SDK
+sees: HTTP calls made with httpx, httpx2 or requests. Healing and tracking
+changes belong in [manifest-python](https://github.com/mnfst/manifest-python).
+See [the coverage table](README.md#what-is-covered).
 
 ## License
 

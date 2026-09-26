@@ -4,14 +4,12 @@ manifest_version: 2
 api_version: 1
 license: MIT
 description: >-
-  Repair rejected tool calls: a corrected set of arguments comes back from
-  Manifest and is applied on the retry.
+  Start the Manifest Python SDK inside Hermes: every HTTP call the agent makes
+  is tracked, and the failures Manifest has a patch for are repaired.
 author: Manifest
 tags:
   - reliability
-  - tools
-provides_hooks:
-  - transform_tool_result
+  - http
 requires_env:
   - name: MNFST_KEY
     description: Manifest project key (Project Settings, Autofix on)

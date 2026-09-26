@@ -1,0 +1,17 @@
+# Keep the plugin on the latest Manifest Python SDK. mnfst is declared once, in
+# pyproject.toml, which is what Hermes installs from. The fix(deps) prefix makes
+# release-please ship each bump as a patch release.
+version: 2
+updates:
+  - package-ecosystem: pip
+    directory: "/"
+    schedule:
+      interval: daily
+    allow:
+      - dependency-name: mnfst
+    # Raise the lower bound, so a release of the plugin always installs the SDK it was tested with.
+    versioning-strategy: increase
+    commit-message:
+      prefix: "fix(deps)"
+    labels:
+      - dependencies
