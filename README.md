@@ -114,6 +114,7 @@ MNFST_DENYLIST=linear.app/delete_issue,internal.example.com   # never these
 - A domain covers its subdomains, with or without a tool name: `linear.app` and `linear.app/list_issues` both match `mcp.linear.app`.
 - A scheme or port in an entry is ignored. `*` is not supported yet: the entry is skipped with a warning in the Hermes log, and an allowlist made only of skipped entries lets nothing through.
 - The denylist wins over the allowlist. With no allowlist, every MCP tool call over HTTP is eligible.
+- Paths are compared decoded, with `.` and `..` resolved, so `%6Cist_issues` matches `list_issues`.
 
 ## Privacy
 

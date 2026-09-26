@@ -34,7 +34,26 @@ def parse_rule(entry: str) -> Optional[Rule]:
     # `*` inside a path is reserved for a future segment wildcard, so it is refused today.
     if not _HOST.match(host) or "*" in path:
         return None
-    return Rule(host.strip("[]"), path or None)
+    canonical = canonical_path(path) if path else "/"
+    return Rule(host.strip("[]"), None if canonical == "/" else canonical)
+
+
+_ESCAPE = re.compile(r"%[0-9a-fA-F]{2}")
+
+
+def canonical_path(path: str) -> str:
+    """The path a server is likely to route: every percent-escape decoded (so `/%70rivate`
+    and `/private%2Fitem` read as `/private…`) and `.`/`..` segments resolved. Rules compare
+    against it, so an encoded spelling cannot slip past a denylist or into an allowlist."""
+    decoded = _ESCAPE.sub(lambda m: chr(int(m.group(0)[1:], 16)), path)
+    out: List[str] = []
+    for segment in decoded.split("/")[1:]:
+        if segment == "..":
+            if out:
+                out.pop()
+        elif segment != ".":
+            out.append(segment)
+    return "/" + "/".join(out)
 
 
 def _entries(value: RuleList) -> List[str]:
@@ -67,7 +86,7 @@ def is_excluded(allow: Optional[Rules], deny: Rules, url: str) -> bool:
         return False
     if not host:
         return False
-    path = parts.path or "/"
+    path = canonical_path(parts.path or "/")
     if any(_covers(rule, host, path) for rule in deny):
         return True
     return allow is not None and not any(_covers(rule, host, path) for rule in allow)

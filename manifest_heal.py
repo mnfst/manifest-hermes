@@ -176,6 +176,17 @@ def heal_payload(*, trace_id: str, tool_name: str, server: str, args: Any, error
 
 # --- heal client --------------------------------------------------------------
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Every call carries MNFST_KEY: a redirect would hand it to whatever host it names,
+    over plain http as readily as https. A 3xx is answered as the error it is instead."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: D102
+        return None
+
+
+_OPENER = urllib.request.build_opener(_NoRedirect)
+
+
 class HealClient:
     def __init__(self, key: str, url: str = DEFAULT_URL, timeout: float = 20.0,
                  clock: Callable[[], float] = time.monotonic) -> None:
@@ -200,7 +211,7 @@ class HealClient:
         request = urllib.request.Request(self.url + path, data=json.dumps(body).encode(),
                                          headers=self._headers(), method=method)
         try:
-            with urllib.request.urlopen(request, timeout=timeout or self.timeout) as response:
+            with _OPENER.open(request, timeout=timeout or self.timeout) as response:
                 raw = response.read()
                 return response.status, (json.loads(raw) if raw else None)
         except urllib.error.HTTPError as error:
@@ -297,11 +308,18 @@ class Patch:
     attempt_id: Optional[str]
 
 
+HEAL_WORKERS = 4
+
+
 class Healer:
     def __init__(self, api: HealClient, timeout: float = 20.0) -> None:
         self.api = api
         self.timeout = timeout
-        self._pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="mnfst-heal")
+        self._pool = ThreadPoolExecutor(max_workers=HEAL_WORKERS, thread_name_prefix="mnfst-heal")
+        # One slot per worker: a failure that finds every worker busy is passed through
+        # rather than queued, so a slow API can never pile up heals that run long after
+        # the call they were for has moved on.
+        self._slots = threading.BoundedSemaphore(HEAL_WORKERS)
 
     def on_error(self, tool_name: str, args: dict, error_message: str,
                  raw_result: Any = None, server: str = "mcp",
@@ -320,8 +338,19 @@ class Healer:
                                    args=args, error_message=error_message, host=host,
                                    raw_result=raw_result,
                                    response_time_ms=response_time_ms if isinstance(response_time_ms, (int, float)) else 0)
-            result = self._pool.submit(self.api.heal, payload).result(timeout=self.timeout)
+            if not self._slots.acquire(blocking=False):
+                _trace_emit("heal_attempt", {**attempt, "verdict": "busy"})
+                return None
+            try:
+                future = self._pool.submit(self._heal, payload)
+            except Exception:
+                self._slots.release()
+                raise
+            result = future.result(timeout=self.timeout)
         except FutureTimeout:
+            # A heal that never started never reaches _heal's release: give its slot back here.
+            if future.cancel():
+                self._slots.release()
             _trace_emit("heal_attempt", {**attempt, "verdict": "timeout"})
             return None
         except Exception:
@@ -339,6 +368,12 @@ class Healer:
         _trace_emit("heal_attempt", {**attempt, "verdict": result.get("status"), "patch": body,
                                      "attempt_id": result.get("healAttemptId")})
         return Patch(tool_name, body, result.get("healAttemptId"))
+
+    def _heal(self, payload: dict) -> Optional[dict]:
+        try:
+            return self.api.heal(payload)
+        finally:
+            self._slots.release()
 
     def outcome(self, patch: Patch, ok: bool, error: Any = None) -> None:
         """The retry ran: report what the tool answered with the patched arguments."""

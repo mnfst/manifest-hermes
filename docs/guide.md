@@ -79,6 +79,8 @@ reported as *not attempted* rather than as a failure.
 
 No Hermes middleware is used, so the plugin runs on any Hermes version.
 
+Calls to Manifest never follow a redirect, so the key never leaves for another host. At most four heals run at once. A failed call that finds all four busy is passed through at once, never queued.
+
 ## Measuring
 
 Every heal attempt and retry outcome appends one JSON line to `$HERMES_TRACE_DIR/events.jsonl` (default
