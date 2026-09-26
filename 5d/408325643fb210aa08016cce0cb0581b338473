@@ -1,0 +1,33 @@
+.github/workflows/ci.yml
+  s_de9546b9854ad9::t_e0535f6fd97bd8 26
+README.md
+  s_de9546b9854ad9::t_ee23d4cc2c0d9e 105-117
+__init__.py
+  s_de9546b9854ad9::t_1cb984b54aad32 19-23,39,41,44,46,73-74,183-184,191-192,220-221,271-276
+docs/guide.md
+  s_de9546b9854ad9::t_77033e4388f344 8,15-16
+manifest_filter.py
+  s_de9546b9854ad9::t_536586dcab99e1 1-73
+pyproject.toml
+  s_de9546b9854ad9::t_22ea5848939329 13
+tests/fixtures/url-filter.json
+  s_de9546b9854ad9::t_a88f5ec1d526bd 1-56
+tests/test_url_filter.py
+  s_de9546b9854ad9::t_57ae7103b0149c 1-102
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "5d408325643fb210aa08016cce0cb0581b338473",
+  "prompts": {},
+  "sessions": {
+    "s_de9546b9854ad9": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "252ec711-d414-48ae-bddf-22b35395ba43",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Guillaume Gay <guillaume.gay@protonmail.com>"
+    }
+  }
+}
